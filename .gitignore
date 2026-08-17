@@ -1,0 +1,49 @@
+# Ignore catkin generated folders
+devel/
+devel/*
+build/
+build/*
+logs/
+logs/*
+# Generated ROS 2 build logs and runtime trajectory exports.
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+.vscode/
+.vscode/*
+.rosinstall
+.rosinstall.bak
+.DS_Store
+.catkin_workspace
+# Ignore all Rosbags
+**.bag
+# Ignore all images
+**.jpeg
+
+# Others
+.idea/
+.idea/*
+cmake-build-debug/
+cmake-build-debug/*
+cmake-build-release/
+cmake-build-release/*
+clion/
+clion-cmake/
+clion-cmake/*
+
+# Catkin stuff
+.catkin_tools/*
+.catkin_tools/
+
+**.swp
+
+# binary files
+*.pyc
+
+# Profiler files
+*.prof
+*.pdf
+
+# IPOPT
+Ipopt-3.12.7/*
+HRT-D/
