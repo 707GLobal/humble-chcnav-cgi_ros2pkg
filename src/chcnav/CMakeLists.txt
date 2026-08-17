@@ -29,6 +29,7 @@ find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)  # humble需要显式声明
 find_package(geometry_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(msg_interfaces REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
@@ -152,7 +153,7 @@ foreach(SINGLE_NODE_FILE ${CHCNAV_NODE_SOURCES} )
     # node name is made of filename and _node
     add_executable(${NODE_NAME} ${SINGLE_NODE_FILE} ${CHCNAV_ROS_SOURCES})
     #add_dependencies(${NODE_NAME} ${PROJECT_NAME}_generate_messages_cpp)
-    ament_target_dependencies(${NODE_NAME} rclcpp std_msgs msg_interfaces geometry_msgs tf2 tf2_ros tf2_geometry_msgs sensor_msgs) 
+    ament_target_dependencies(${NODE_NAME} rclcpp std_msgs msg_interfaces geometry_msgs nav_msgs tf2 tf2_ros tf2_geometry_msgs sensor_msgs) 
 
     target_link_libraries(${NODE_NAME} ${CHCNAV_ROS_LIBS})
 
