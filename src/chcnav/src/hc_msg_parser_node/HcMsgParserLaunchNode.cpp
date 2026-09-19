@@ -54,7 +54,7 @@ int main(int argc, char **argv)
     private_nh->declare_parameter<int>("rate", rate);
     if (private_nh->get_parameter<int>("rate", rate) == rate)
         RCLCPP_INFO(nh->get_logger(), "rate [0], No message pub deal subscribe only");
-    RCLCPP_INFO(nh->get_logger(), "rate : %d\n", rate);
+    RCLCPP_INFO(nh->get_logger(), "rate : %d", rate);
 
     bool enable_read = true;
     bool enable_write = true;

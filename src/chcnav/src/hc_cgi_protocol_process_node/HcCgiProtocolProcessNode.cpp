@@ -5,28 +5,10 @@
 #include "msg_interfaces/msg/hcrawimub.hpp"
 #include "hc_cgi_protocol.h"
 
-#include "geometry_msgs/msg/twist_stamped.hpp"
-#include "nav_msgs/msg/odometry.hpp"
-#include "tf2/LinearMath/Quaternion.h"
-
-#include <cmath>
-
 static rclcpp::Publisher<msg_interfaces::msg::Hcinspvatzcb>::SharedPtr gs_devpvt_pub;
 static rclcpp::Publisher<msg_interfaces::msg::Hcrawimub>::SharedPtr gs_devimu_pub;
-static rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr gs_odom_pub;
-static rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr gs_velocity_pub;
 
 static unsigned int g_leaps = 18;
-
-// ENU 原点与航向偏置（与 FSD 地图对齐，launch 可配置；原点未配置时锁定首个固定解）
-static double g_enu_origin_lat = 0.0;
-static double g_enu_origin_lon = 0.0;
-static double g_enu_origin_alt = 0.0;
-static double g_yaw_offset_rad = 0.0;
-static bool g_enu_origin_locked = false;
-
-#define DEG2RAD(d) ((d) * (3.14159265358979323846 / 180.0))
-#define EARTH_RADIUS_M 6378137.0
 
 /**
  * @brief 处理华测协议的回调函数
@@ -45,15 +27,6 @@ int main(int argc, char **argv)
 
     gs_devpvt_pub = nh->create_publisher<msg_interfaces::msg::Hcinspvatzcb>("/chcnav/devpvt", 1000);
     gs_devimu_pub = nh->create_publisher<msg_interfaces::msg::Hcrawimub>("/chcnav/devimu", 1000);
-
-    // ENU 原点与航向偏置参数（FSD 地图对齐用）
-    g_enu_origin_lat = nh->declare_parameter("enu_origin_lat", 0.0);
-    g_enu_origin_lon = nh->declare_parameter("enu_origin_lon", 0.0);
-    g_enu_origin_alt = nh->declare_parameter("enu_origin_alt", 0.0);
-    g_yaw_offset_rad = nh->declare_parameter("yaw_offset_deg", 0.0) * (3.14159265358979323846 / 180.0);
-
-    gs_odom_pub = nh->create_publisher<nav_msgs::msg::Odometry>("/chcnav/odometry", 1000);
-    gs_velocity_pub = nh->create_publisher<geometry_msgs::msg::TwistStamped>("/chcnav/velocity", 1000);
 
     rclcpp::spin(nh);
     rclcpp::shutdown();
@@ -85,7 +58,7 @@ static void hc_sentence_callback(const msg_interfaces::msg::HcSentence::ConstPtr
 {
     if (hc__cgi_check_crc32((uint8_t *)(&msg->data[0]), msg->data.size()) != 0)
     {
-        fprintf(stderr, "crc32 check failed!\n");
+        RCLCPP_WARN(rclcpp::get_logger("HcCgiProtocolProcessNode"), "CGI crc32 check failed");
         return;
     }
 
@@ -102,61 +75,6 @@ static void hc_sentence_callback(const msg_interfaces::msg::HcSentence::ConstPtr
     }
 
     return;
-}
-
-// 将解析后的 PVT 转为 nav_msgs/Odometry 与 TwistStamped 发布（供 FSD 使用）
-static void publish_ins_odometry(const msg_interfaces::msg::Hcinspvatzcb & devpvt)
-{
-    // RTK 固定解门限：仅 stat[1]==4/8（RTK 稳定解）视为有效
-    if (devpvt.stat[1] != 4 && devpvt.stat[1] != 8)
-        return;
-
-    // 原点未配置时锁定首个固定解
-    if (!g_enu_origin_locked && g_enu_origin_lat == 0.0 && g_enu_origin_lon == 0.0)
-    {
-        g_enu_origin_lat = devpvt.latitude;
-        g_enu_origin_lon = devpvt.longitude;
-        g_enu_origin_alt = devpvt.altitude;
-        g_enu_origin_locked = true;
-    }
-
-    // WGS84 → 局部 ENU（等距圆柱近似，赛道尺度内足够）
-    const double e = (devpvt.longitude - g_enu_origin_lon) * DEG2RAD(1.0) * EARTH_RADIUS_M * std::cos(DEG2RAD(g_enu_origin_lat));
-    const double n = (devpvt.latitude - g_enu_origin_lat) * DEG2RAD(1.0) * EARTH_RADIUS_M;
-    const double u = devpvt.altitude - g_enu_origin_alt;
-
-    // 姿态：车体系 roll/pitch/yaw(deg) → 四元数（pitch 取反，与 ChcnavFixDemo 一致）
-    tf2::Quaternion q;
-    q.setRPY(DEG2RAD(devpvt.roll), -DEG2RAD(devpvt.pitch), DEG2RAD(devpvt.yaw) + g_yaw_offset_rad);
-
-    // nav_msgs/Odometry
-    nav_msgs::msg::Odometry odom;
-    odom.header = devpvt.header;
-    odom.header.frame_id = "odom";
-    odom.child_frame_id = "base_link";
-    odom.pose.pose.position.x = e;
-    odom.pose.pose.position.y = n;
-    odom.pose.pose.position.z = u;
-    odom.pose.pose.orientation.x = q.getX();
-    odom.pose.pose.orientation.y = q.getY();
-    odom.pose.pose.orientation.z = q.getZ();
-    odom.pose.pose.orientation.w = q.getW();
-    // 车体系速度与偏航角速度（与 FSD EKF odom1 约定一致）
-    odom.twist.twist.linear.x = devpvt.vehicle_linear_velocity.x;
-    odom.twist.twist.linear.y = devpvt.vehicle_linear_velocity.y;
-    odom.twist.twist.linear.z = devpvt.vehicle_linear_velocity.z;
-    odom.twist.twist.angular.z = DEG2RAD(devpvt.vehicle_angular_velocity.z);
-    gs_odom_pub->publish(odom);
-
-    // TwistStamped（controller 前视 + PID 反馈）
-    geometry_msgs::msg::TwistStamped vel;
-    vel.header = devpvt.header;
-    vel.header.frame_id = "odom";
-    vel.twist.linear.x = devpvt.vehicle_linear_velocity.x;
-    vel.twist.linear.y = devpvt.vehicle_linear_velocity.y;
-    vel.twist.linear.z = devpvt.vehicle_linear_velocity.z;
-    vel.twist.angular.z = DEG2RAD(devpvt.vehicle_angular_velocity.z);
-    gs_velocity_pub->publish(vel);
 }
 
 static void msg_deal__hcinspvatzcb(const msg_interfaces::msg::HcSentence::ConstPtr &msg)
@@ -276,9 +194,6 @@ static void msg_deal__hcinspvatzcb(const msg_interfaces::msg::HcSentence::ConstP
             devpvt.receiver[index] = *((unsigned char *)(&msg->data[276 + index]));
 
         gs_devpvt_pub->publish(devpvt);
-
-        // 顺带发布 FSD 使用的标准消息
-        publish_ins_odometry(devpvt);
     }
 }
 

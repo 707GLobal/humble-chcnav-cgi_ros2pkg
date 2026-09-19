@@ -70,6 +70,10 @@ static int hc__msg_deal_S21(hc__msg_parser_t *parser, hc__msg_token_t *token, un
 static int hc__msg_deal_S22(hc__msg_parser_t *parser, hc__msg_token_t *token, unsigned char c);
 static int hc__msg_deal_S23(hc__msg_parser_t *parser, hc__msg_token_t *token, unsigned char c);
 static int hc__msg_deal_S24(hc__msg_parser_t *parser, hc__msg_token_t *token, unsigned char c);
+static int hc__msg_deal_S25(hc__msg_parser_t *parser, hc__msg_token_t *token, unsigned char c);
+static int hc__msg_deal_S26(hc__msg_parser_t *parser, hc__msg_token_t *token, unsigned char c);
+static int hc__msg_deal_S27(hc__msg_parser_t *parser, hc__msg_token_t *token, unsigned char c);
+static int hc__msg_deal_S28(hc__msg_parser_t *parser, hc__msg_token_t *token, unsigned char c);
 
 // bind state with proc func
 static int (*g_hc__msg_state_handler[])(hc__msg_parser_t *, hc__msg_token_t *, unsigned char) = {
@@ -98,6 +102,10 @@ static int (*g_hc__msg_state_handler[])(hc__msg_parser_t *, hc__msg_token_t *, u
     [HC__STATE_S22] = hc__msg_deal_S22,
     [HC__STATE_S23] = hc__msg_deal_S23,
     [HC__STATE_S24] = hc__msg_deal_S24,
+    [HC__STATE_S25] = hc__msg_deal_S25,
+    [HC__STATE_S26] = hc__msg_deal_S26,
+    [HC__STATE_S27] = hc__msg_deal_S27,
+    [HC__STATE_S28] = hc__msg_deal_S28,
 };
 
 /**
@@ -145,7 +153,7 @@ int hc__msg_parser_scan(hc__msg_parser_t *parser, hc__msg_token_t *token)
         // printf("state[%d] read char[0x%02x][%c]\n", parser->state, c, c);
 
         // deal all state. call func pointer
-        if (parser->state <= HC__STATE_S24 && parser->state >= HC__STATE_S0)
+        if (parser->state <= HC__STATE_S28 && parser->state >= HC__STATE_S0)
         {
             // printf("state[%d] parser specified_len[%u]\n", parser->state, parser->specified_len);
             int pointer_move_step = g_hc__msg_state_handler[parser->state](parser, token, c);
@@ -218,6 +226,10 @@ static int hc__msg_deal_S1(hc__msg_parser_t *parser, hc__msg_token_t *token, uns
     else if (0x55 == c)
     {
         parser->state = HC__STATE_S12;
+    }
+    else if (0x44 == c) /* NovAtel 帧头 0xaa 0x44 0x12 0x1c */
+    {
+        parser->state = HC__STATE_S25;
     }
     else
     {
@@ -621,4 +633,155 @@ static int hc__msg_deal_S24(hc__msg_parser_t *parser, hc__msg_token_t *token, un
     parser->state = HC__STATE_S0;
 
     return 0;
+}
+
+/* ***************************************************************
+ * NovAtel 二进制帧 (BESTPOSB/HEADINGB 等) 解析状态
+ * 帧结构: 同步字 aa 44 12 1c + OEM7 帧头(28字节) + 数据 + CRC32(4字节)
+ * 帧头内 byte8-9 为消息长度(小端)，约定不含 CRC；帧总长 = 28 + 长度 + 4
+ * 同时兼容"长度含CRC"的约定：CRC 校验不通过时回退再验一次并截掉4字节
+ * ************************************************************* */
+
+/* NovAtel CRC32: NovAtel 专有算法 (与标准 zlib CRC32 不同)
+ * 初值 0x00000000, 反射多项式 0xEDB88320, 结果不做最终异或
+ * 参见 NovAtel OEM7 Firmware Reference Manual: CalculateBlockCRC32
+ * 校验范围: 同步字起至数据末尾 (不含 CRC 本身) */
+static unsigned int novatel_crc32(const unsigned char *buf, unsigned int len)
+{
+    unsigned int crc = 0;
+    unsigned int i;
+    int j;
+
+    for (i = 0; i < len; i++)
+    {
+        crc ^= buf[i];
+        for (j = 0; j < 8; j++)
+            crc = (crc & 1) ? (crc >> 1) ^ 0xEDB88320U : (crc >> 1);
+    }
+
+    return crc;
+}
+
+/* 读取 token 内小端 uint32 值 */
+static unsigned int novatel_token_le32(const unsigned char *value, unsigned int off)
+{
+    return ((unsigned int)value[off]) |
+           ((unsigned int)value[off + 1] << 8) |
+           ((unsigned int)value[off + 2] << 16) |
+           ((unsigned int)value[off + 3] << 24);
+}
+
+/* NovAtel 同步字第 2 字节 0x12 */
+static int hc__msg_deal_S25(hc__msg_parser_t *parser, hc__msg_token_t *token, unsigned char c)
+{
+    if (0x12 == c)
+    {
+        parser->state = HC__STATE_S26;
+    }
+    else
+    {
+        token->type = HC__TOKERN_ERROR;
+        parser->error.error_code = HC__STATE_S25;
+        snprintf(parser->error.description, sizeof(parser->error.description), "error char[0x%02x][%c]", c, c);
+
+        return 0;
+    }
+
+    return 1;
+}
+
+/* NovAtel 同步字第 3 字节 0x1c (OEM7) */
+static int hc__msg_deal_S26(hc__msg_parser_t *parser, hc__msg_token_t *token, unsigned char c)
+{
+    if (0x1c == c)
+    {
+        /* 已收 0..3 同步字+帧头长度, 继续收帧头剩余 4..27 共 24 字节 */
+        parser->state = HC__STATE_S27;
+        parser->specified_len = 24;
+    }
+    else
+    {
+        token->type = HC__TOKERN_ERROR;
+        parser->error.error_code = HC__STATE_S26;
+        snprintf(parser->error.description, sizeof(parser->error.description), "error char[0x%02x][%c]", c, c);
+
+        return 0;
+    }
+
+    return 1;
+}
+
+/* 收完 OEM7 帧头后, 从 byte8-9 取消息长度并转数据态 */
+static int hc__msg_deal_S27(hc__msg_parser_t *parser, hc__msg_token_t *token, unsigned char c)
+{
+    if (parser->specified_len > 0)
+    {
+        parser->specified_len--;
+    }
+    else
+    {
+        unsigned char msg_len_l = token->token_value.value[8];
+        unsigned char msg_len_h = token->token_value.value[9];
+        unsigned int msg_len = (msg_len_h << 8) + msg_len_l;
+
+        /* 帧总长 = 帧头(28) + 消息长度(不含CRC) + CRC(4) */
+        if (msg_len == 0 || 28u + msg_len + 4u > sizeof(token->token_value.value))
+        {
+            token->type = HC__TOKERN_ERROR;
+            parser->error.error_code = HC__STATE_S27;
+            snprintf(parser->error.description, sizeof(parser->error.description), "novatel msg length error[%u]", msg_len);
+
+            return 0;
+        }
+
+        parser->state = HC__STATE_S28;
+        parser->specified_len = msg_len + 4;
+
+        return 0;
+    }
+
+    return 1;
+}
+
+/* 收完 数据+CRC, 用 CRC32 判定长度字段约定并出帧 */
+static int hc__msg_deal_S28(hc__msg_parser_t *parser, hc__msg_token_t *token, unsigned char c)
+{
+    if (parser->specified_len > 0)
+    {
+        parser->specified_len--;
+    }
+
+    if (parser->specified_len == 0)
+    {
+        /* 当前字节 c 是本帧最后一个字节（CRC 第4字节）。
+         * 主循环在 handler 返回后才把 c 写入 token buffer，
+         * 所以此时 value_len 比完整帧少1。
+         * 先把 c 临时填入，校验后主循环会再写一次（幂等）。 */
+        token->token_value.value[token->token_value.value_len] = (char)c;
+        unsigned int total   = token->token_value.value_len + 1; /* 完整帧长 */
+        unsigned int crc_off = total - 4;
+
+        /* 约定1: 长度字段不含 CRC, CRC 在 [crc_off, crc_off+4) */
+        if (crc_off >= 4 && novatel_crc32((unsigned char *)token->token_value.value, crc_off) == novatel_token_le32(token->token_value.value, crc_off))
+        {
+            token->type = HC__TOKERN_NOVATEL_MSG;
+        }
+        /* 约定2: 长度字段含 CRC, 帧尾实际多出 4 字节, 回退校验并裁剪 */
+        else if (crc_off >= 8 && novatel_crc32((unsigned char *)token->token_value.value, crc_off - 4) == novatel_token_le32(token->token_value.value, crc_off - 4))
+        {
+            token->token_value.value_len -= 4;
+            token->type = HC__TOKERN_NOVATEL_MSG;
+        }
+        else
+        {
+            token->type = HC__TOKERN_ERROR;
+            parser->error.error_code = HC__STATE_S28;
+            snprintf(parser->error.description, sizeof(parser->error.description),
+                "novatel crc32 check failed[%u]", total);
+        }
+
+        parser->state = HC__STATE_S0;
+    }
+
+    return 1;
 }

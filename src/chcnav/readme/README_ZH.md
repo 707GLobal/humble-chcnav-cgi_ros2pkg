@@ -1,17 +1,19 @@
-# CHCNAV ROS2-Humble 驱动
+# CHCNAV ROS2 驱动
 
-本驱动（`chcnav` 功能包）用于接入华测导航 CGI 系列组合导航设备：通过 **串口 / TCP / UDP / CAN / 文件** 读取设备输出的混合协议数据（华测 CGI 自定义二进制协议 + NMEA 协议），完成分类、校验与解析，并发布为 ROS2 话题；同时支持通过 NTRIP 在设备无网络时转发差分数据辅助固定。
+本驱动（`chcnav` 功能包）用于接入华测导航 CGI 系列组合导航设备：通过 **串口 / TCP / UDP / CAN / 文件** 读取设备输出的混合协议数据（华测 CGI 自定义二进制协议 + NMEA 协议 + NovAtel 二进制协议），完成分类、校验与解析，并发布为 ROS2 话题；同时支持通过 NTRIP 在设备无网络时转发差分数据辅助固定。
 
-| 版本   | 更改说明                                               | 更改人 | 日期       |
-| ------ | ------------------------------------------------------ | ------ | ---------- |
-| V0.4   | 初版                                                   | 吴其荣 | 2023-04-10 |
-| V0.4.1 | 更新 udp 文档                                          | 吴其荣 | 2023-04-18 |
-| V0.4.2 | 更新环境准备文档                                       | 张小镛 | 2023-08-16 |
-| V1.0.0 | ROS2 使用说明文档                                      | 张小镛 | 2023-10-09 |
-| V1.0.3 | 支持 humble 版本及 arm 架构                            | 程彦淇 | 2025-12-05 |
-| V1.0.4 | 修复 demo 6 无法登录 cors 的问题                       | 王延祥 | 2026-05-12 |
-| V1.0.5 | README文档重构，修改 devimu 加速度的变量名称           | 王延祥 | 2026-07-06 |
-| V1.0.6 | 支持 TCP Server 模式，demo_6 支持通过 TCP 方式送差分。 | 王延祥 | 2026-07-30 |
+| 版本   | 更改说明                                                     | 更改人 | 日期       |
+| ------ | ------------------------------------------------------------ | ------ | ---------- |
+| V0.4   | 初版                                                         | 吴其荣 | 2023-04-10 |
+| V0.4.1 | 更新 udp 文档                                                | 吴其荣 | 2023-04-18 |
+| V0.4.2 | 更新环境准备文档                                             | 张小镛 | 2023-08-16 |
+| V1.0.0 | ROS2 使用说明文档                                            | 张小镛 | 2023-10-09 |
+| V1.0.3 | 支持 galactic/humble 版本及 arm 架构                         | 程彦淇 | 2025-12-05 |
+| V1.0.4 | 修复 demo 6 无法登录 cors 的问题                             | 王延祥 | 2026-05-12 |
+| V1.0.5 | README文档重构，修改 devimu 加速度的变量名称                 | 王延祥 | 2026-07-06 |
+| V1.0.6 | 支持 TCP Server 模式，demo_6 支持通过 TCP 方式送差分。       | 王延祥 | 2026-07-30 |
+| V1.0.7 | 适配 Bestposb 协议 和 Headingb 协议                          | 王延祥 | 2026-08-12 |
+| V1.0.8 | 合并 foxy / galactic / humble 三个版本为单一功能包，统一维护。 | 王延祥 | 2026-08-17 |
 
 ---
 
@@ -32,16 +34,14 @@
 
 ### 1.1 前置条件
 
-- 已安装 ROS2 Humble（Ubuntu 22.04；推荐 `ros-humble-desktop`；`ros-base` 缺少部分依赖，需自行补装）。环境搭建见 [附录 A](#附录-aros2-humble-环境搭建)。
+- 已安装 ROS2 **Foxy**（Ubuntu 20.04）、**Galactic**（Ubuntu 20.04）或 **Humble**（Ubuntu 22.04）之一。推荐安装 `ros-<distro>-desktop`，`ros-base` 缺少部分依赖，需自行补装。环境搭建见 [附录 A](#附录-aros2-环境搭建)。
 - 设备已按 [3. 设备端配置](#3-设备端配置) 开启协议输出（推荐：`HCINSPVATZCB`、`GPCHC`、`GPGGA`）。
 
 ### 1.2 编译
 
 ```shell
-# 解压源码包
-tar -zxvf ./humble-chcnav-cgi_ros2pkg_v1.0.5.tar.gz
-# 进入工作空间根目录
-cd humble-chcnav-cgi_ros2pkg_v1.0.5
+# 进入工作空间根目录（chcnav-cgi_ros2pkg_v1.0.8 或你自己解压的目录）
+cd chcnav-cgi_ros2pkg_v1.0.8
 # 确认存在 src 目录，其中包含 chcnav、msg_interfaces 两个功能包
 ls ./src
 # 编译（msg_interfaces 与 chcnav 两个包均需编译成功）
@@ -65,6 +65,8 @@ sudo usermod -aG dialout $USER
 ```shell
 # 以串口 demo 为例，xml 与 py 两种 launch 格式均可
 ros2 launch ./src/chcnav/launch/demo_1.xml
+# 或者
+ros2 launch chcnav demo_1.xml
 ```
 
 ### 1.5 验证
@@ -76,6 +78,9 @@ ros2 topic list
 #   /chcnav/hc_sentence
 #   /chcnav/devpvt
 #   /chcnav/devimu
+# 若设备输出 NovAtel 协议，还应能看到：
+#   /chcnav/bestpos
+#   /chcnav/heading
 
 ros2 topic echo /chcnav/devpvt     # 有持续输出即说明链路正常
 ```
@@ -94,6 +99,8 @@ ros2 topic echo /chcnav/devpvt     # 有持续输出即说明链路正常
 | `/chcnav/hc_sentence` | 华测 CGI 自定义协议（header 格式，如 HCINSPVATZCB、HCRAWIMUB） | `msg_interfaces/msg/HcSentence` | **未做** CRC32 校验（原始二进制透传） |
 | `/chcnav/devpvt` | HCINSPVATZCB（组合导航数据） | `msg_interfaces/msg/Hcinspvatzcb` | **已通过** CRC32 校验 |
 | `/chcnav/devimu` | HCRAWIMUIB（原始 IMU） | `msg_interfaces/msg/Hcrawimub` | **已通过** CRC32 校验 |
+| `/chcnav/bestpos` | BESTPOSB（NovAtel GNSS 定位） | `msg_interfaces/msg/BESTPOS` | **已通过** CRC32 校验；仅接收到 NovAtel 协议时发布 |
+| `/chcnav/heading` | HEADINGB（NovAtel 双天线航向） | `msg_interfaces/msg/HEADING` | **已通过** CRC32 校验；仅接收到 NovAtel 协议时发布 |
 | `/fix` | 由 `devpvt` 转换 | `sensor_msgs/msg/NavSatFix` | **仅启动 demo_9 时发布** |
 | `/imu` | 由 `devpvt` 转换 | `sensor_msgs/msg/Imu` | **仅启动 demo_9 时发布** |
 
@@ -101,7 +108,7 @@ ros2 topic echo /chcnav/devpvt     # 有持续输出即说明链路正常
 
 - 多个解析节点（多路串口/TCP）可同时运行，数据发布到同一话题，通过 `header.frame_id`（即节点 `name`）区分来源。
 - `ros2 topic echo` 默认截断超过 128 字符的字符串和超过 16 个元素的数组（末尾显示 `...`），属显示行为，数据本身完整；加 `--full-length`（简写 `-f`）参数可查看全文。
-- 自定义消息话题（`/chcnav/` 下 4 个）需在 `source install/setup.bash` 后才能订阅；`/fix`、`/imu` 为 ROS 标准消息，无需 source 也可订阅。
+- 自定义消息话题（`/chcnav/` 下各话题）需在 `source install/setup.bash` 后才能订阅；`/fix`、`/imu` 为 ROS 标准消息，无需 source 也可订阅。
 
 各话题的字段说明与输出示例如下。完整字段定义见 `msg_interfaces` 包（`chcnav/msg/` 下同名文件为字段注释参考）。
 
@@ -282,7 +289,7 @@ receiver:
 
 ### 2.4 devimu（Hcrawimub）
 
-原始 IMU 数据（源自 HCRAWIMUIB 协议）：`angular_velocity`（deg/s）、`linear_acceleration`、`temp`（℃）、`err_status`、`yaw`（Z 轴陀螺积分航向，-180~180，系数 0.01）。
+原始 IMU 数据（源自 HCRAWIMUB 协议）：`angular_velocity`（deg/s）、`linear_acceleration`、`temp`（℃）、`err_status`、`yaw`（Z 轴陀螺积分航向，-180~180，系数 0.01）。
 
 输出示例（`ros2 topic echo /chcnav/devimu`）：
 
@@ -308,7 +315,91 @@ yaw: 0
 receiver: 0
 ```
 
-### 2.5 fix（仅 demo_9）
+### 2.5 bestpos（NovAtel BESTPOSB）
+
+NovAtel 的 GNSS 定位结果，由 `HcMsgParserLaunchNode` 在收到 BESTPOSB 帧后**直接解码发布**，无需额外节点。
+
+关键字段：
+
+- `arc_header`：NovAtel 帧头（GPS 周/周内毫秒、消息号、接收机状态等）
+- 位置：`lat`/`lon`（deg）、`hgt`（椭球高，m）、`undulation`（大地水准面差距，m）
+- 精度：`lat_stdev`/`lon_stdev`/`hgt_stdev`（标准差，m）
+- 解状态：`sol_status.value`（0=SOL_COMPUTED 解算成功）、`pos_type.value`（定位类型，如 50=RTK_FIXED）
+- 卫星：`num_svs`（跟踪数）、`num_sol_svs`（参与解算数）
+- 差分：`diff_age`（差分龄期，s）、`sol_age`（解龄期，s）
+- 其他：`stn_id`（基站 ID）、`ext_sol_stat`（扩展解状态）、`sig_mask`（信号掩码）
+
+时间戳：`header.stamp` 为帧内 GPS 时间换算的 ROS 时间，换算公式同 `devpvt`（见 [6. 时间戳说明](#6-时间戳说明)），闰秒数通过 launch 参数 `leap_seconds` 配置（默认 18）。
+
+输出示例（`ros2 topic echo /chcnav/bestpos`）：
+
+```yaml
+header:
+  stamp:
+    sec: 1783334320
+    nanosec: 0
+  frame_id: rs232
+arc_header:
+  msg_id: 42
+  gps_week: 2426
+  gps_ms: 124738000
+sol_status:
+  value: 0
+pos_type:
+  value: 50
+lat: 31.159600169
+lon: 121.178476846
+hgt: 49.777
+undulation: 10.531
+lat_stdev: 0.012
+lon_stdev: 0.011
+hgt_stdev: 0.024
+diff_age: 1.0
+sol_age: 0.0
+num_svs: 38
+num_sol_svs: 32
+```
+
+### 2.6 heading（NovAtel HEADINGB）
+
+NovAtel 的双天线航向结果，由 `HcMsgParserLaunchNode` 在收到 HEADINGB 帧后**直接解码发布**。
+
+关键字段：
+
+- `arc_header`：NovAtel 帧头
+- `heading`：航向角（deg，正北为 0，顺时针为正，范围 0~360）
+- `pitch`：俯仰角（deg，范围 ±90）
+- `length`：双天线基线长（m）
+- `heading_stdev` / `pitch_stdev`：航向/俯仰标准差
+- `sol_status.value`：解状态；`pos_type.value`：定向类型（如 50=NARROW_INT 表示窄带整周固定）
+- `num_sv_tracked` / `num_sv_in_sol`：跟踪/解算卫星数
+
+输出示例（`ros2 topic echo /chcnav/heading`）：
+
+```yaml
+header:
+  stamp:
+    sec: 1783334320
+    nanosec: 0
+  frame_id: rs232
+arc_header:
+  msg_id: 971
+  gps_week: 2426
+  gps_ms: 124738000
+sol_status:
+  value: 0
+pos_type:
+  value: 50
+length: 1.2
+heading: 8.304
+pitch: 0.810
+heading_stdev: 0.05
+pitch_stdev: 0.10
+num_sv_tracked: 38
+num_sv_in_sol: 32
+```
+
+### 2.7 fix（仅 demo_9）
 
 ROS 标准 GNSS 定位消息 `sensor_msgs/msg/NavSatFix`，由 [demo_9](#49-demo_9串口--fiximu-转换) 的 `ChcnavFixDemo` 节点将 `devpvt` 转换后发布。
 
@@ -343,11 +434,11 @@ position_covariance:
 position_covariance_type: 0
 ```
 
-### 2.6 imu（仅 demo_9）
+### 2.8 imu（仅 demo_9）
 
 ROS 标准 IMU 消息 `sensor_msgs/msg/Imu`，由 [demo_9](#49-demo_9串口--fiximu-转换) 的 `ChcnavFixDemo` 节点将 `devpvt` 转换后发布。
 
-- 数据为**车辆坐标系**，加速度未做重力补偿；
+- 数据为**车辆坐标系**，加速度未做重力补偿（hcinspvatzcb 中的 vgyro 和 vacc 字段）；
 - 角速度已由 deg/s 转为 **rad/s**；
 - `orientation` 四元数由 `roll`/`pitch` 及 `heading2` 换算的航向生成；
 - `header.stamp` 为**系统时间**（与 `devpvt` 的 GPS 时间不同）。
@@ -460,7 +551,7 @@ linear_acceleration_covariance:
 
 ![demo3节点关系](images/demo3节点关系.png)
 
-- **HcMsgParserLaunchNode（数据接入 / 分包节点）**：从串口/TCP/UDP/CAN/文件读取混合数据流，按协议分类后发布到 `hc_sentence`、`nmea_sentence`（CAN 方式例外，仅终端打印，见 [4.1](#41-demo_0can)）。通过 `type` 参数选择数据源类型，不同数据源所需参数见各 demo 小节。同时订阅私有话题 `write`（`msg_interfaces/msg/Int8Array`）：向该话题发布的二进制数据会写回串口/TCP 连接的设备（NTRIP 差分下发即依赖此话题）。
+- **HcMsgParserLaunchNode（数据接入 / 分包节点）**：从串口/TCP/UDP/CAN/文件读取混合数据流，按协议分类后发布到 `hc_sentence`、`nmea_sentence`（CAN 方式例外，仅终端打印，见 [4.1](#41-demo_0can)）。若数据流中包含 NovAtel 二进制协议（BESTPOSB / HEADINGB），则在完成 CRC32 校验后**直接解码并发布** `/chcnav/bestpos` 与 `/chcnav/heading`，无需额外节点。通过 `type` 参数选择数据源类型，不同数据源所需参数见各 demo 小节。同时订阅私有话题 `write`（`msg_interfaces/msg/Int8Array`）：向该话题发布的二进制数据会写回串口/TCP 连接的设备（NTRIP 差分下发即依赖此话题）。
   - `enable_read` / `enable_write` 可分别控制读/写能力，支持“GGA 读链路”和“差分写链路”分离场景。
 - **HcCgiProtocolProcessNode（协议解析节点）**：订阅 `hc_sentence`，对二进制协议做 CRC32 校验后解析，发布 `devpvt`（HCINSPVATZCB）与 `devimu`（HCRAWIMUIB）。无参数，直接声明即可。
 - **NtripServerLaunchNode（NTRIP 节点）**：仅 demo_6 使用。
@@ -790,7 +881,7 @@ linear_acceleration_covariance:
 
 ### 4.9 demo_9（串口 + fix/imu 转换）
 
-`demo_9` 将 `devpvt` 转换为标准的 `sensor_msgs/msg/Imu` 与 `sensor_msgs/msg/NavSatFix`，源码见 `src/demo/ChcnavFixDemo.cpp`。发布的 `/fix`、`/imu` 话题的字段说明与输出示例见 [2.5](#25-fix仅-demo_9)、[2.6](#26-imu仅-demo_9)。
+`demo_9` 将 `devpvt` 转换为标准的 `sensor_msgs/msg/Imu` 与 `sensor_msgs/msg/NavSatFix`，源码见 `src/demo/ChcnavFixDemo.cpp`。发布的 `/fix`、`/imu` 话题的字段说明与输出示例见 [2.7](#27-fix仅-demo_9)、[2.8](#28-imu仅-demo_9)。
 
 ```xml
 <launch>
@@ -814,7 +905,7 @@ linear_acceleration_covariance:
 **RViz2 可视化**：
 
 ```shell
-sudo apt install ros-humble-imu-tools   # RViz2 显示 Imu 消息需要该插件
+sudo apt install ros-${ROS_DISTRO}-imu-tools   # RViz2 显示 Imu 消息需要该插件
 ros2 run rviz2 rviz2                    # Add -> Imu，Topic 选择 /imu
 ```
 
@@ -880,9 +971,17 @@ sudo sh -c 'echo 1 > /sys/bus/usb-serial/devices/ttyUSB0/latency_timer'   # 设�
 
 ## 附录
 
-### 附录 A：ROS2 Humble 环境搭建
+### 附录 A：ROS2 环境搭建
 
-参考 [ROS2 Humble 官方文档](https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debians.html)。国内网络建议使用清华镜像源：
+根据你使用的 Ubuntu 版本选择对应的 ROS2 发行版：
+
+| ROS2 发行版 | Ubuntu 版本 | 官方文档 |
+| --- | --- | --- |
+| Foxy | Ubuntu 20.04 | [文档](https://docs.ros.org/en/foxy/Installation/Ubuntu-Install-Debians.html) |
+| Galactic | Ubuntu 20.04 | [文档](https://docs.ros.org/en/galactic/Installation/Ubuntu-Install-Debians.html) |
+| Humble | Ubuntu 22.04 | [文档](https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debians.html) |
+
+以 Humble 为例（将 `humble` 替换为对应发行版名称即可用于 Foxy/Galactic），国内网络建议使用清华镜像源：
 
 ```shell
 sudo apt update && sudo apt install locales

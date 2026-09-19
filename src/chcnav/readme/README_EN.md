@@ -1,6 +1,6 @@
-# CHCNAV ROS2-Humble Driver
+# CHCNAV ROS2 Driver
 
-This driver (the `chcnav` package) is used to connect CHCNAV CGI series GNSS/INS integrated navigation devices. It reads mixed-protocol data (CHCNAV CGI custom binary protocol + NMEA protocol) output by the device via **Serial / TCP / UDP / CAN / File**, performs classification, validation, and parsing, and publishes it as ROS2 topics; it also supports forwarding differential data via NTRIP to assist RTK fixing when the device lacks a network connection.
+This driver (the `chcnav` package) is used to connect CHCNAV CGI series GNSS/INS integrated navigation devices. It reads mixed-protocol data (CHCNAV CGI custom binary protocol + NMEA protocol + NovAtel binary protocol) output by the device via **Serial / TCP / UDP / CAN / File**, performs classification, validation, and parsing, and publishes it as ROS2 topics; it also supports forwarding differential data via NTRIP to assist RTK fixing when the device lacks a network connection.
 
 | Version | Description | Author | Date |
 | ------ | ------------------------------------------------------ | ------ | ---------- |
@@ -8,10 +8,12 @@ This driver (the `chcnav` package) is used to connect CHCNAV CGI series GNSS/INS
 | V0.4.1 | Updated UDP documentation                              | Qirong Wu | 2023-04-18 |
 | V0.4.2 | Updated environment setup documentation                | Xiaoyong Zhang | 2023-08-16 |
 | V1.0.0 | ROS2 usage documentation                               | Xiaoyong Zhang | 2023-10-09 |
-| V1.0.3 | Supported humble version and arm architecture          | Yanqi Cheng | 2025-12-05 |
-| V1.0.4 | Fixed demo 6 CORS login issue                          | Yanxiang Wang | 2026-05-12 |
-| V1.0.5 | README refactored, renamed devimu acceleration variable | Yanxiang Wang | 2026-07-06 |
-| V1.0.6 | Supported TCP Server mode, demo_6 supports sending differential data via TCP | Yanxiang Wang | 2026-07-30 |
+| V1.0.3 | Supported galactic/humble version and arm architecture | Jacob Cheng | 2025-12-05 |
+| V1.0.4 | Fixed demo 6 CORS login issue                          | Xavier Wang | 2026-05-12 |
+| V1.0.5 | README refactored, renamed devimu acceleration variable | Xavier Wang | 2026-07-06 |
+| V1.0.6 | Supported TCP Server mode, demo_6 supports sending differential data via TCP | Xavier Wang | 2026-07-30 |
+| V1.0.7 | Supported Bestposb and Headingb | Xavier Wang | 2026-08-12 |
+| V1.0.8 | Merged foxy / galactic / humble into a single unified package. | Xavier Wang | 2026-08-17 |
 
 ---
 
@@ -32,16 +34,14 @@ This driver (the `chcnav` package) is used to connect CHCNAV CGI series GNSS/INS
 
 ### 1.1 Prerequisites
 
-- ROS2 Humble installed (Ubuntu 22.04; `ros-humble-desktop` is recommended; `ros-base` lacks some dependencies and requires manual installation). For environment setup, see [Appendix A](#appendix-a-ros2-humble-environment-setup).
+- ROS2 **Foxy** (Ubuntu 20.04), **Galactic** (Ubuntu 20.04), or **Humble** (Ubuntu 22.04) installed. `ros-<distro>-desktop` is recommended; `ros-base` lacks some dependencies and requires manual installation. For environment setup, see [Appendix A](#appendix-a-ros2-environment-setup).
 - The device has enabled protocol output according to [3. Device Configuration](#3-device-configuration) (Recommended: `HCINSPVATZCB`, `GPCHC`, `GPGGA`).
 
 ### 1.2 Build
 
 ```shell
-# Extract the source code package
-tar -zxvf ./humble-chcnav-cgi_ros2pkg_v1.0.5.tar.gz
-# Enter the workspace root directory
-cd humble-chcnav-cgi_ros2pkg_v1.0.5
+# Enter the workspace root directory (chcnav-cgi_ros2pkg_v1.0.8 or your extracted directory)
+cd chcnav-cgi_ros2pkg_v1.0.8
 # Confirm the src directory exists, containing chcnav and msg_interfaces packages
 ls ./src
 # Build (both msg_interfaces and chcnav packages must be built successfully)
@@ -65,6 +65,8 @@ Or grant temporary permission: `sudo chmod 777 /dev/ttyUSB0`
 ```shell
 # Taking the serial demo as an example, both xml and py launch formats are supported
 ros2 launch ./src/chcnav/launch/demo_1.xml
+# or
+ros2 launch chcnav demo_1.xml
 ```
 
 ### 1.5 Verification
@@ -76,6 +78,9 @@ ros2 topic list
 #   /chcnav/hc_sentence
 #   /chcnav/devpvt
 #   /chcnav/devimu
+# If the device outputs NovAtel protocol, you should also see:
+#   /chcnav/bestpos
+#   /chcnav/heading
 
 ros2 topic echo /chcnav/devpvt     # Continuous output indicates the link is normal
 ```
@@ -94,6 +99,8 @@ The driver identifies any supported protocol from the input data stream and publ
 | `/chcnav/hc_sentence` | CHCNAV CGI custom protocol (header format, e.g., HCINSPVATZCB, HCRAWIMUB) | `msg_interfaces/msg/HcSentence` | **No** CRC32 checksum (raw binary passthrough) |
 | `/chcnav/devpvt` | HCINSPVATZCB (GNSS/INS data) | `msg_interfaces/msg/Hcinspvatzcb` | **Passed** CRC32 checksum |
 | `/chcnav/devimu` | HCRAWIMUIB (Raw IMU) | `msg_interfaces/msg/Hcrawimub` | **Passed** CRC32 checksum |
+| `/chcnav/bestpos` | BESTPOSB (NovAtel GNSS positioning) | `msg_interfaces/msg/BESTPOS` | **Passed** CRC32 checksum; published only when NovAtel protocol is received |
+| `/chcnav/heading` | HEADINGB (NovAtel dual-antenna heading) | `msg_interfaces/msg/HEADING` | **Passed** CRC32 checksum; published only when NovAtel protocol is received |
 | `/fix` | Converted from `devpvt` | `sensor_msgs/msg/NavSatFix` | **Published only when demo_9 is running** |
 | `/imu` | Converted from `devpvt` | `sensor_msgs/msg/Imu` | **Published only when demo_9 is running** |
 
@@ -101,7 +108,7 @@ Notes:
 
 - Multiple parsing nodes (multi-channel serial/TCP) can run simultaneously and publish data to the same topic, distinguishing sources via `header.frame_id` (i.e., node `name`).
 - By default, `ros2 topic echo` truncates strings exceeding 128 characters and arrays exceeding 16 elements (displaying `...` at the end), which is a display behavior; the data itself is complete. Add the `--full-length` (or `-f`) parameter to view the full text.
-- Custom message topics (the 4 under `/chcnav/`) require `source install/setup.bash` before they can be subscribed to; `/fix` and `/imu` are standard ROS messages and can be subscribed to without sourcing.
+- Custom message topics (under `/chcnav/`) require `source install/setup.bash` before they can be subscribed to; `/fix` and `/imu` are standard ROS messages and can be subscribed to without sourcing.
 
 The field descriptions and output examples for each topic are as follows. For full field definitions, see the `msg_interfaces` package (the homonymous files under `chcnav/msg/` are for field comment references).
 
@@ -282,7 +289,7 @@ receiver:
 
 ### 2.4 devimu（Hcrawimub）
 
-Raw IMU data (derived from the HCRAWIMUIB protocol): `angular_velocity` (deg/s), `linear_acceleration`, `temp` (℃), `err_status`, `yaw` (Z-axis gyro integrated heading, -180~180, scale factor 0.01).
+Raw IMU data (derived from the HCRAWIMUB protocol): `angular_velocity` (deg/s), `linear_acceleration`, `temp` (℃), `err_status`, `yaw` (Z-axis gyro integrated heading, -180~180, scale factor 0.01).
 
 Output example (`ros2 topic echo /chcnav/devimu`):
 
@@ -308,7 +315,91 @@ yaw: 0
 receiver: 0
 ```
 
-### 2.5 fix (Only demo_9)
+### 2.5 bestpos (NovAtel BESTPOSB)
+
+NovAtel GNSS positioning result, **decoded and published directly** by `HcMsgParserLaunchNode` upon receiving a BESTPOSB frame — no additional node required.
+
+Key fields:
+
+- `arc_header`: NovAtel frame header (GPS week/ms, message ID, receiver status, etc.)
+- Position: `lat`/`lon` (deg), `hgt` (ellipsoidal height, m), `undulation` (geoid separation, m)
+- Accuracy: `lat_stdev`/`lon_stdev`/`hgt_stdev` (standard deviation, m)
+- Solution status: `sol_status.value` (0 = SOL_COMPUTED), `pos_type.value` (positioning type, e.g. 50 = RTK_FIXED)
+- Satellites: `num_svs` (tracked), `num_sol_svs` (used in solution)
+- Differential: `diff_age` (differential age, s), `sol_age` (solution age, s)
+- Others: `stn_id` (base station ID), `ext_sol_stat`, `sig_mask`
+
+Timestamp: `header.stamp` is the ROS time converted from the GPS time in the frame, using the same formula as `devpvt` (see [6. Timestamp Explanation](#6-timestamp-explanation)). The leap seconds value is configured via the launch parameter `leap_seconds` (default 18).
+
+Output example (`ros2 topic echo /chcnav/bestpos`):
+
+```yaml
+header:
+  stamp:
+    sec: 1783334320
+    nanosec: 0
+  frame_id: rs232
+arc_header:
+  msg_id: 42
+  gps_week: 2426
+  gps_ms: 124738000
+sol_status:
+  value: 0
+pos_type:
+  value: 50
+lat: 31.159600169
+lon: 121.178476846
+hgt: 49.777
+undulation: 10.531
+lat_stdev: 0.012
+lon_stdev: 0.011
+hgt_stdev: 0.024
+diff_age: 1.0
+sol_age: 0.0
+num_svs: 38
+num_sol_svs: 32
+```
+
+### 2.6 heading (NovAtel HEADINGB)
+
+NovAtel dual-antenna heading result, **decoded and published directly** by `HcMsgParserLaunchNode` upon receiving a HEADINGB frame.
+
+Key fields:
+
+- `arc_header`: NovAtel frame header
+- `heading`: Heading angle (deg, 0 = true north, clockwise positive, range 0~360)
+- `pitch`: Pitch angle (deg, range ±90)
+- `length`: Dual-antenna baseline length (m)
+- `heading_stdev` / `pitch_stdev`: Heading/pitch standard deviation
+- `sol_status.value`: Solution status; `pos_type.value`: Heading type (e.g. 50 = NARROW_INT for narrow-lane integer fix)
+- `num_sv_tracked` / `num_sv_in_sol`: Tracked / used satellite count
+
+Output example (`ros2 topic echo /chcnav/heading`):
+
+```yaml
+header:
+  stamp:
+    sec: 1783334320
+    nanosec: 0
+  frame_id: rs232
+arc_header:
+  msg_id: 971
+  gps_week: 2426
+  gps_ms: 124738000
+sol_status:
+  value: 0
+pos_type:
+  value: 50
+length: 1.2
+heading: 8.304
+pitch: 0.810
+heading_stdev: 0.05
+pitch_stdev: 0.10
+num_sv_tracked: 38
+num_sv_in_sol: 32
+```
+
+### 2.7 fix (Only demo_9)
 
 ROS standard GNSS positioning message `sensor_msgs/msg/NavSatFix`, published after `devpvt` is converted by the `ChcnavFixDemo` node of [demo_9](#49-demo_9-serial--fiximu-conversion).
 
@@ -343,11 +434,11 @@ position_covariance:
 position_covariance_type: 0
 ```
 
-### 2.6 imu (Only demo_9)
+### 2.8 imu (Only demo_9)
 
 ROS standard IMU message `sensor_msgs/msg/Imu`, published after `devpvt` is converted by the `ChcnavFixDemo` node of [demo_9](#49-demo_9-serial--fiximu-conversion).
 
-- The data is in the **vehicle coordinate system**, and the acceleration is not gravity-compensated;
+- The data is in the **vehicle coordinate system**, and the acceleration is not gravity-compensated (hcinspvatzcb's vgyro and vacc field);
 - Angular velocity has been converted from deg/s to **rad/s**;
 - `orientation` quaternion is generated from the heading converted from `roll`/`pitch` and `heading2`;
 - `header.stamp` is the **system time** (different from the GPS time of `devpvt`).
@@ -460,7 +551,7 @@ Each demo is composed of the following nodes combined (taking `demo_3` node rela
 
 ![Demo3 Node Relationship](images/demo3节点关系.png)
 
-- **HcMsgParserLaunchNode (Data Access / Packet Splitting Node)**: Reads mixed data streams from Serial/TCP/UDP/CAN/File, classifies them according to protocols, and publishes them to `hc_sentence`, `nmea_sentence` (CAN method is an exception, only printed in the terminal, see the declaration in [4.1](#41-demo_0-can)). Select the data source type through the `type` parameter; the required parameters for different data sources are detailed in each demo subsection. It also subscribes to the private topic `write` (`msg_interfaces/msg/Int8Array`): binary data published to this topic will be written back to the device connected via Serial/TCP (NTRIP differential data transmission relies on this topic).
+- **HcMsgParserLaunchNode (Data Access / Packet Splitting Node)**: Reads mixed data streams from Serial/TCP/UDP/CAN/File, classifies them according to protocols, and publishes them to `hc_sentence`, `nmea_sentence` (CAN method is an exception, only printed in the terminal, see the declaration in [4.1](#41-demo_0-can)). If the data stream contains NovAtel binary protocol (BESTPOSB / HEADINGB), it **decodes and publishes** `/chcnav/bestpos` and `/chcnav/heading` directly after CRC32 validation — no additional node required. Select the data source type through the `type` parameter; the required parameters for different data sources are detailed in each demo subsection. It also subscribes to the private topic `write` (`msg_interfaces/msg/Int8Array`): binary data published to this topic will be written back to the device connected via Serial/TCP (NTRIP differential data transmission relies on this topic).
   - `enable_read` / `enable_write` can separately control read/write capabilities, supporting "GGA read link" and "differential write link" separation scenarios.
 - **HcCgiProtocolProcessNode (Protocol Parsing Node)**: Subscribes to `hc_sentence`, performs CRC32 validation on binary protocols before parsing, and publishes `devpvt` (HCINSPVATZCB) and `devimu` (HCRAWIMUIB). No parameters, just declare it directly.
 - **NtripServerLaunchNode (NTRIP Node)**: Used only in demo_6.
@@ -790,7 +881,7 @@ For test steps and result analysis, see [Appendix B](#appendix-b-time-uniformity
 
 ### 4.9 demo_9 (Serial + fix/imu Conversion)
 
-`demo_9` converts `devpvt` into standard `sensor_msgs/msg/Imu` and `sensor_msgs/msg/NavSatFix`, source code can be found in `src/demo/ChcnavFixDemo.cpp`. For the field descriptions and output examples of the published `/fix`, `/imu` topics, see [2.5](#25-fix-only-demo_9), [2.6](#26-imu-only-demo_9).
+`demo_9` converts `devpvt` into standard `sensor_msgs/msg/Imu` and `sensor_msgs/msg/NavSatFix`, source code can be found in `src/demo/ChcnavFixDemo.cpp`. For the field descriptions and output examples of the published `/fix`, `/imu` topics, see [2.7](#27-fix-only-demo_9), [2.8](#28-imu-only-demo_9).
 
 ```xml
 <launch>
@@ -814,7 +905,7 @@ It also publishes a static TF: `map -> chcnav -> rs232` (used for RViz2 display)
 **RViz2 Visualization**:
 
 ```shell
-sudo apt install ros-humble-imu-tools   # This plugin is needed for RViz2 to display Imu messages
+sudo apt install ros-${ROS_DISTRO}-imu-tools   # This plugin is needed for RViz2 to display Imu messages
 ros2 run rviz2 rviz2                    # Add -> Imu, Topic select /imu
 ```
 
@@ -880,9 +971,17 @@ sudo sh -c 'echo 1 > /sys/bus/usb-serial/devices/ttyUSB0/latency_timer'   # Set 
 
 ## Appendix
 
-### Appendix A: ROS2 Humble Environment Setup
+### Appendix A: ROS2 Environment Setup
 
-Refer to the [Official ROS2 Humble Documentation](https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debians.html). For domestic networks, using the Tsinghua mirror source is recommended:
+Choose the ROS2 distribution that matches your Ubuntu version:
+
+| ROS2 Distribution | Ubuntu Version | Official Docs |
+| --- | --- | --- |
+| Foxy | Ubuntu 20.04 | [Docs](https://docs.ros.org/en/foxy/Installation/Ubuntu-Install-Debians.html) |
+| Galactic | Ubuntu 20.04 | [Docs](https://docs.ros.org/en/galactic/Installation/Ubuntu-Install-Debians.html) |
+| Humble | Ubuntu 22.04 | [Docs](https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debians.html) |
+
+The following example uses Humble -- replace `humble` with `foxy` or `galactic` as needed. For networks in China, the Tsinghua mirror is recommended:
 
 ```shell
 sudo apt update && sudo apt install locales

@@ -12,6 +12,12 @@
 #include "tf2_ros/static_transform_broadcaster.h"
 #include "tf2/convert.h"
 
+#ifdef ROS_DISTRO_HUMBLE
+#include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
+#else
+#include "tf2_geometry_msgs/tf2_geometry_msgs.h"
+#endif
+
 #include <map>
 #include <string>
 
@@ -111,10 +117,7 @@ static void pvt_callback(const msg_interfaces::msg::Hcinspvatzcb::ConstPtr msg)
     qtn.setRPY(msg->roll / 180 * M_PI, -msg->pitch / 180 * M_PI, yaw / 180 * M_PI);
     // 将tf2::Quaternion对象转换为geometry_msgs::msg::Quaternion消息
     geometry_msgs::msg::Quaternion qtn_msg;
-    qtn_msg.x = qtn.getX();
-    qtn_msg.y = qtn.getY();
-    qtn_msg.z = qtn.getZ();
-    qtn_msg.w = qtn.getW();
+    tf2::convert(qtn, qtn_msg);
     imu.orientation = qtn_msg;
 
     gs_imu_pub->publish(imu);

@@ -28,6 +28,12 @@ set(msg_files
   "msg/Hcinspvatzcb.msg"
   "msg/HcSentence.msg"
   "msg/Hcrawimub.msg"
+  "msg/ArcHeader.msg"
+  "msg/SolutionStatus.msg"
+  "msg/PositionOrVelocityType.msg"
+  "msg/BestExtendedSolutionStatus.msg"
+  "msg/BESTPOS.msg"
+  "msg/HEADING.msg"
 )
 # uncomment the following section in order to fill in
 # further dependencies manually.

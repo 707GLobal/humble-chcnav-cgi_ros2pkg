@@ -42,7 +42,9 @@ typedef enum _hc__msg_token_type_e
     /* hc short header msg token */
     HC__TOKERN_HC_SHORT_MSG,
     /* NMEA msg token */
-    HC__TOKERN_NMEA_MGS
+    HC__TOKERN_NMEA_MGS,
+    /* NovAtel binary msg token */
+    HC__TOKERN_NOVATEL_MSG
 } hc__msg_token_type_e;
 
 typedef enum hc__msg_parser_state_e
@@ -72,6 +74,10 @@ typedef enum hc__msg_parser_state_e
     HC__STATE_S22,
     HC__STATE_S23,
     HC__STATE_S24,
+    HC__STATE_S25,
+    HC__STATE_S26,
+    HC__STATE_S27,
+    HC__STATE_S28,
     HC__STATE_NONE
 } hc__msg_parser_state_e;
 

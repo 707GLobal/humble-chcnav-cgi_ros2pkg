@@ -4,13 +4,9 @@ project(chcnav)
 message(STATUS "---------------------------")
 message(STATUS "-- USE CHCNAV ROS DRIVER --")
 message(STATUS "---------------------------")
+message(STATUS "ROS Distro: $ENV{ROS_DISTRO}")
 
 set(CMAKE_BUILD_TYPE Debug)
-
-# Default to C99
-if(NOT CMAKE_C_STANDARD)
-  set(CMAKE_C_STANDARD 99)
-endif()
 
 # Default to C++14
 if(NOT CMAKE_CXX_STANDARD)
@@ -27,12 +23,20 @@ find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
-find_package(tf2_geometry_msgs REQUIRED)  # humble需要显式声明
 find_package(geometry_msgs REQUIRED)
-find_package(nav_msgs REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(msg_interfaces REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
+
+# tf2_geometry_msgs handling
+find_package(tf2_geometry_msgs REQUIRED)
+if($ENV{ROS_DISTRO} STREQUAL "foxy")
+    add_definitions(-DROS_DISTRO_FOXY)
+elseif($ENV{ROS_DISTRO} STREQUAL "galactic")
+    add_definitions(-DROS_DISTRO_GALACTIC)
+elseif($ENV{ROS_DISTRO} STREQUAL "humble")
+    add_definitions(-DROS_DISTRO_HUMBLE)
+endif()
 
 include_directories(
     include
@@ -52,20 +56,8 @@ if(APPLE)
 endif()
 
 if(UNIX AND NOT APPLE)
-    # If Linux, add rt and pthread
     set(rt_LIBRARIES rt)
     set(pthread_LIBRARIES pthread)
-    #catkin_package(
-        #LIBRARIES ${PROJECT_NAME}
-        #INCLUDE_DIRS include
-        #DEPENDS rt pthread
-    #)
-else()
-    # Otherwise normal call
-    #catkin_package(
-        #LIBRARIES ${PROJECT_NAME}
-        #INCLUDE_DIRS include
-    #)
 endif()
 
 set(SERIAL_LIB_SRCS
@@ -74,21 +66,17 @@ set(SERIAL_LIB_SRCS
     ${PROJECT_SOURCE_DIR}/src/hc_msg_parser_node/device_connector/serial_common/serial/include/serial/v8stdint.h
 )
 if(APPLE)
-    # If OSX
     list(APPEND SERIAL_LIB_SRCS ${PROJECT_SOURCE_DIR}/src/hc_msg_parser_node/device_connector/serial_common/serial/src/impl/unix.cc)
     list(APPEND SERIAL_LIB_SRCS ${PROJECT_SOURCE_DIR}/src/hc_msg_parser_node/device_connector/serial_common/serial/src/impl/list_ports/list_ports_osx.cc)
 elseif(UNIX)
-    # If unix
     list(APPEND SERIAL_LIB_SRCS ${PROJECT_SOURCE_DIR}/src/hc_msg_parser_node/device_connector/serial_common/serial/src/impl/unix.cc)
     list(APPEND SERIAL_LIB_SRCS ${PROJECT_SOURCE_DIR}/src/hc_msg_parser_node/device_connector/serial_common/serial/src/impl/list_ports/list_ports_linux.cc)
 else()
-    # If windows
     list(APPEND SERIAL_LIB_SRCS ${PROJECT_SOURCE_DIR}/src/hc_msg_parser_node/device_connector/serial_common/serial/src/impl/win.cc)
     list(APPEND SERIAL_LIB_SRCS ${PROJECT_SOURCE_DIR}/src/hc_msg_parser_node/device_connector/serial_common/serial/src/impl/list_ports/list_ports_win.cc)
 endif()
 
 include_directories(${PROJECT_SOURCE_DIR}/src/hc_msg_parser_node/device_connector/serial_common/serial/include)
-
 include_directories(${PROJECT_SOURCE_DIR}/src/hc_msg_parser_node/device_connector)
 include_directories(${PROJECT_SOURCE_DIR}/src/hc_msg_parser_node/device_connector/udp_common)
 include_directories(${PROJECT_SOURCE_DIR}/src/hc_msg_parser_node/device_connector/tcp_common)
@@ -123,7 +111,6 @@ if (NTRIP_SERVER_INCLUDE)
         ${PROJECT_SOURCE_DIR}/src/ntrip_server_node/NtripServerLaunchNode.cpp
         ${CHCNAV_NODE_SOURCES}
     )
-
 endif()
 
 # 设置依赖库
@@ -146,25 +133,37 @@ set(CHCNAV_NODE_SOURCES
 )
 
 foreach(SINGLE_NODE_FILE ${CHCNAV_NODE_SOURCES} )
-    message(STATUS "node file ${SINGLE_NODE_FILE} detected")
     STRING(REGEX REPLACE ".+/(.+)\\..*" "\\1" NODE_NAME ${SINGLE_NODE_FILE})
     message(STATUS "node ${NODE_NAME}")
 
-    # node name is made of filename and _node
     add_executable(${NODE_NAME} ${SINGLE_NODE_FILE} ${CHCNAV_ROS_SOURCES})
-    #add_dependencies(${NODE_NAME} ${PROJECT_NAME}_generate_messages_cpp)
-    ament_target_dependencies(${NODE_NAME} rclcpp std_msgs msg_interfaces geometry_msgs nav_msgs tf2 tf2_ros tf2_geometry_msgs sensor_msgs) 
+    
+    # 统一使用 tf2_geometry_msgs 依赖
+    ament_target_dependencies(${NODE_NAME} 
+        rclcpp 
+        std_msgs 
+        msg_interfaces 
+        geometry_msgs 
+        tf2 
+        tf2_ros 
+        tf2_geometry_msgs 
+        sensor_msgs
+    ) 
 
     target_link_libraries(${NODE_NAME} ${CHCNAV_ROS_LIBS})
 
     install(TARGETS ${NODE_NAME}
         DESTINATION lib/${PROJECT_NAME})
-
 endforeach(SINGLE_NODE_FILE)
 
+# Install directories
+install(DIRECTORY include/ launch/ lib/ readme/ scripts/
+    DESTINATION share/${PROJECT_NAME}
+)
+
 ament_package()
+
 
 message(STATUS "---------------------------")
 message(STATUS "-- END CHCNAV ROS DRIVER --")
 message(STATUS "---------------------------")
-

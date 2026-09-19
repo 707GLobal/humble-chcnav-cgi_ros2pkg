@@ -14,6 +14,7 @@
 #include "msg_interfaces/msg/string.hpp"
 #include "device_connector.hpp"
 #include "hc_msg_parser.h"
+#include "novatel_decode.hpp"
 
 using namespace std;
 
@@ -23,6 +24,7 @@ typedef enum _hc__msg_type_e
     HC__MSG_NMEA = 0,         // NMEA协议
     HC__MSG_CGI_SHORT_HEADER, // CGI SHORT HEADER 自定义协议
     HC__MSG_CGI_HEADER,       // CGI HEADER 自定义协议
+    HC__MSG_NOVATEL,          // NovAtel 二进制协议 (BESTPOSB/HEADINGB 等)
 } hc__msg_type_e;
 
 // 单条华测协议结构体
@@ -85,10 +87,14 @@ public:
     std::shared_ptr<rclcpp::Node> private_nh; // private 节点handle
     rclcpp::Publisher<msg_interfaces::msg::String>::SharedPtr nmea_puber;   // nmea topic
     rclcpp::Publisher<msg_interfaces::msg::HcSentence>::SharedPtr hc_puber;     // hc topic
+    rclcpp::Publisher<msg_interfaces::msg::BESTPOS>::SharedPtr bestpos_puber;   // bestpos topic
+    rclcpp::Publisher<msg_interfaces::msg::HEADING>::SharedPtr heading_puber;   // heading topic
     rclcpp::Subscription<msg_interfaces::msg::Int8Array>::SharedPtr write_suber; // sub topic
 
     msg_interfaces::msg::String nmea_msg = msg_interfaces::msg::String();    // nmea msg
     msg_interfaces::msg::HcSentence hc_msg = msg_interfaces::msg::HcSentence(); // hc msg
+
+    int leap_seconds = 18; // GPS 闰秒，可通过 launch 参数 leap_seconds 覆盖
 
     hc__device_connector *device_connector; // 设备连接器
 
@@ -110,14 +116,20 @@ public:
             this->private_nh = private_nh;
 
             // 初始化nmea协议话题
-            this->nmea_puber = this->nh->create_publisher<msg_interfaces::msg::String>("/chcnav/nmea_sentence", 1000); // a public topic
-            //this->nmea_msg.header = 0;
+            this->nmea_puber = this->nh->create_publisher<msg_interfaces::msg::String>("/chcnav/nmea_sentence", 1000);
             this->nmea_msg.header.frame_id = node_name;
 
             // 初始化华测自定义协议话题
-            this->hc_puber = this->nh->create_publisher<msg_interfaces::msg::HcSentence>("/chcnav/hc_sentence", 1000); // a public topic
-            //this->hc_msg.header.seq = 0;
+            this->hc_puber = this->nh->create_publisher<msg_interfaces::msg::HcSentence>("/chcnav/hc_sentence", 1000);
             this->hc_msg.header.frame_id = node_name;
+
+            // 初始化 NovAtel 解码后话题 (直接发布，不经过中间 novatel_sentence)
+            this->bestpos_puber = this->nh->create_publisher<msg_interfaces::msg::BESTPOS>("/chcnav/bestpos", 1000);
+            this->heading_puber = this->nh->create_publisher<msg_interfaces::msg::HEADING>("/chcnav/heading", 1000);
+
+            // 读取闰秒参数
+            this->private_nh->declare_parameter<int>("leap_seconds", this->leap_seconds);
+            this->private_nh->get_parameter<int>("leap_seconds", this->leap_seconds);
 
             // 订阅写话题
             this->enable_read = enable_read;
@@ -156,7 +168,7 @@ public:
             RCLCPP_ERROR(nh->get_logger(),"node init failed !");
             return;
         }
-        RCLCPP_INFO(nh->get_logger(),"node init successed !");
+        RCLCPP_INFO(nh->get_logger(), "node init succeeded");
         // 创建单线程执行器
         //rclcpp::executors::SingleThreadedExecutor spinner;
         // 启动执行器
@@ -223,10 +235,19 @@ public:
                         single_msg.value_len = this->token.token_value.value_len;
                         break;
 
+                    case HC__TOKERN_NOVATEL_MSG:
+                        single_msg.msg_type = HC__MSG_NOVATEL;
+                        // NovAtel 消息号位于帧头 byte4-5, 小端，必须 cast 到 unsigned 避免符号扩展
+                        single_msg.type_value.cgi_header.msg_id =
+                            ((unsigned char)this->token.token_value.value[5] << 8) |
+                            (unsigned char)this->token.token_value.value[4];
+                        memcpy(single_msg.value, this->token.token_value.value, this->token.token_value.value_len);
+                        single_msg.value_len = this->token.token_value.value_len;
+                        break;
+
                     case HC__TOKERN_NONE:
                     case HC__TOKERN_ERROR:
                     default:
-                        // RCLCPP_WARN("[S%d] %s", parser.error.error_code, parser.error.description);
                         parser.error.error_code = HC__STATE_NONE;
                         memset(parser.error.description, 0x00, sizeof(parser.error.description));
                         parser.state = HC__STATE_S0;
@@ -234,7 +255,7 @@ public:
                 }
 
                 // 直到取到了一条合法消息才会休眠
-                if (token.type == HC__TOKERN_HC_MSG || token.type == HC__TOKERN_NMEA_MGS || token.type == HC__TOKERN_HC_SHORT_MSG)
+                if (token.type == HC__TOKERN_HC_MSG || token.type == HC__TOKERN_NMEA_MGS || token.type == HC__TOKERN_HC_SHORT_MSG || token.type == HC__TOKERN_NOVATEL_MSG)
                 {
                     msg_recv_callback(single_msg, this);
                     memset(&single_msg, 0, sizeof(hc__single_msg_t));
@@ -276,7 +297,6 @@ int parser_read_handler(void *buffer, size_t size, size_t *size_read, void *pars
 
 int msg_recv_callback(hc__single_msg_t single_msg, hc__msg_parser_node *node)
 {
-    RCLCPP_INFO(node->nh->get_logger(),"msg received!");
     int index;
     char raw_xor_string[5];
     unsigned char xor_check_uchar;
@@ -298,7 +318,7 @@ int msg_recv_callback(hc__single_msg_t single_msg, hc__msg_parser_node *node)
             char nmea_end_2[2];
             nmea_end_2[0] = single_msg.value[single_msg.value_len - 2];
             nmea_end_2[1] = single_msg.value[single_msg.value_len - 1];
-            
+
             // 去除nmea最后的\r\n，如需要则注释这两行
             single_msg.value[single_msg.value_len - 1] = '\0';
             single_msg.value[single_msg.value_len - 2] = '\0';
@@ -320,19 +340,20 @@ int msg_recv_callback(hc__single_msg_t single_msg, hc__msg_parser_node *node)
             raw_xor_string[4] = '\0';
 
             // 如果校验值与原始值一致则发布
-            if (strtol(raw_xor_string, NULL, 16) != xor_check_uchar) 
+            if (strtol(raw_xor_string, NULL, 16) != xor_check_uchar)
             {
-                fprintf(stderr, "[%s] xor check not pass\n", single_msg.value);
-                printf("[%s] xor check not pass\n", single_msg.value);
+                RCLCPP_WARN(node->nh->get_logger(), "NMEA xor check failed: %s", single_msg.value);
             }
             else if((nmea_end_2[0] != '\r') || (nmea_end_2[1] != '\n'))
             {
-                fprintf(stderr, "[%s] tail check not pass\n", single_msg.value);
-                printf("[%s] tail check not pass\n", single_msg.value);
+                RCLCPP_WARN(node->nh->get_logger(), "NMEA tail check failed: %s", single_msg.value);
             }
             else
             {
-                node->nmea_puber->publish(node->nmea_msg);                        
+                RCLCPP_INFO_THROTTLE(node->nh->get_logger(), *node->nh->get_clock(), 5000,
+                                     "NMEA data receiving");
+                RCLCPP_DEBUG(node->nh->get_logger(), "NMEA received: %s", single_msg.value);
+                node->nmea_puber->publish(node->nmea_msg);
             }
             break;
 
@@ -348,13 +369,16 @@ int msg_recv_callback(hc__single_msg_t single_msg, hc__msg_parser_node *node)
             node->hc_msg.data.resize(single_msg.value_len);
             memcpy(&node->hc_msg.data[0], single_msg.value, single_msg.value_len);
 
+            RCLCPP_INFO_THROTTLE(node->nh->get_logger(), *node->nh->get_clock(), 5000,
+                                 "CGI data receiving, msg_id=0x%04X", single_msg.type_value.cgi_header.msg_id);
+            RCLCPP_DEBUG(node->nh->get_logger(), "CGI received: msg_id=0x%04X len=%u",
+                         single_msg.type_value.cgi_header.msg_id, single_msg.value_len);
             // 发布
             node->hc_puber->publish(node->hc_msg);
-
             break;
 
         case HC__MSG_CGI_SHORT_HEADER:
-                    // 赋值msg id
+            // 赋值msg id
             node->hc_msg.msg_id = single_msg.type_value.cgi_short_header.msg_id;
 
             // 发布时间
@@ -365,11 +389,52 @@ int msg_recv_callback(hc__single_msg_t single_msg, hc__msg_parser_node *node)
             node->hc_msg.data.resize(single_msg.value_len);
             memcpy(&node->hc_msg.data[0], single_msg.value, single_msg.value_len);
 
+            RCLCPP_INFO_THROTTLE(node->nh->get_logger(), *node->nh->get_clock(), 5000,
+                                 "CGI-short data receiving, msg_id=0x%04X", single_msg.type_value.cgi_short_header.msg_id);
+            RCLCPP_DEBUG(node->nh->get_logger(), "CGI-short received: msg_id=0x%04X len=%u",
+                         single_msg.type_value.cgi_short_header.msg_id, single_msg.value_len);
             // 发布
             node->hc_puber->publish(node->hc_msg);
             break;
+
+        case HC__MSG_NOVATEL:
+        {
+            unsigned int msg_id = single_msg.type_value.cgi_header.msg_id;
+
+            // 只处理二进制日志 (msg_type byte[6] == 0)
+            if (single_msg.value_len > 6 && (unsigned char)single_msg.value[6] != 0)
+            {
+                RCLCPP_WARN(node->nh->get_logger(), "NovAtel skip non-binary log: msg_id=0x%04X msg_type=%d",
+                            msg_id, (int)(unsigned char)single_msg.value[6]);
+                break;
+            }
+
+            RCLCPP_INFO_THROTTLE(node->nh->get_logger(), *node->nh->get_clock(), 5000,
+                                 "NovAtel data receiving, msg_id=0x%04X", msg_id);
+            RCLCPP_DEBUG(node->nh->get_logger(), "NovAtel received: msg_id=0x%04X len=%u", msg_id, single_msg.value_len);
+
+            // 构造 vector 供解码函数使用
+            std::vector<int8_t> d(single_msg.value, single_msg.value + single_msg.value_len);
+            rclcpp::Time stamp = node->nh->now();
+
+            switch (msg_id)
+            {
+                case NOVATEL_MSG_ID_BESTPOS:
+                    nv_decode_bestpos(d, stamp, node->leap_seconds,
+                                      node->bestpos_puber, node->nh->get_logger());
+                    break;
+                case NOVATEL_MSG_ID_HEADING:
+                    nv_decode_heading(d, stamp, node->leap_seconds,
+                                      node->heading_puber, node->nh->get_logger());
+                    break;
+                default:
+                    RCLCPP_WARN(node->nh->get_logger(), "unknown novatel msg_id=0x%04X", msg_id);
+                    break;
+            }
+            break;
+        }
         default:
-            RCLCPP_WARN(node->nh->get_logger(),"protocol unsupport");
+            RCLCPP_WARN(node->nh->get_logger(), "unsupported protocol type: %d", single_msg.msg_type);
             break;
     }
 
