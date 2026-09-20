@@ -21,6 +21,8 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(rcl_interfaces REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -126,6 +128,10 @@ endforeach(SINGLE_SOURCE_FILE)
 set(CHCNAV_NODE_SOURCES
     ${PROJECT_SOURCE_DIR}/src/hc_cgi_protocol_process_node/HcCgiProtocolProcessNode.cpp
     ${PROJECT_SOURCE_DIR}/src/hc_msg_parser_node/HcMsgParserLaunchNode.cpp
+    # 自定义开发（与厂商 demo 分离）：华测 CGI -> FSD 桥
+    ${PROJECT_SOURCE_DIR}/src/chcnav_fsd_bridge/ChcnavFsdBridge.cpp
+    # 自定义开发：运行期数据文本日志（只订阅，不影响现有节点）
+    ${PROJECT_SOURCE_DIR}/src/chcnav_data_logger/ChcnavDataLogger.cpp
     ${PROJECT_SOURCE_DIR}/src/demo/ChcnavFixDemo.cpp
     ${PROJECT_SOURCE_DIR}/src/demo/TimeUniformityNode.cpp
     ${PROJECT_SOURCE_DIR}/src/demo/RecordMsgToFile.cpp
@@ -144,10 +150,12 @@ foreach(SINGLE_NODE_FILE ${CHCNAV_NODE_SOURCES} )
         std_msgs 
         msg_interfaces 
         geometry_msgs 
+        nav_msgs
         tf2 
         tf2_ros 
         tf2_geometry_msgs 
         sensor_msgs
+        rcl_interfaces
     ) 
 
     target_link_libraries(${NODE_NAME} ${CHCNAV_ROS_LIBS})
@@ -157,7 +165,8 @@ foreach(SINGLE_NODE_FILE ${CHCNAV_NODE_SOURCES} )
 endforeach(SINGLE_NODE_FILE)
 
 # Install directories
-install(DIRECTORY include/ launch/ lib/ readme/ scripts/
+# config/ 存放自定义桥的调参文件 chcnav_fsd_bridge.yaml
+install(DIRECTORY include/ launch/ lib/ readme/ scripts/ config/
     DESTINATION share/${PROJECT_NAME}
 )
 

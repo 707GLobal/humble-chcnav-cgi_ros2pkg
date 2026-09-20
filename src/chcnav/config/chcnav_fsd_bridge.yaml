@@ -1,0 +1,80 @@
+# ============================================================
+# 华测 CGI 组合导航 -> FSD 桥   参数配置（唯一调参入口）
+#
+# 使用方：launch/chcnav_fsd_bridge.launch.py
+# 启动：  scripts/start_chcnav_fsd.sh（一键，含环境/串口检查与按需构建）
+#
+# 优先级：命令行 > 本文件 > launch 内置默认
+#   ./start_chcnav_fsd.sh --port=/dev/ttyUSB1 --yaw-offset=1.5
+#
+# 改完本文件无需重新 colcon build，直接重跑启动脚本即可生效
+# ============================================================
+
+
+# ---------- 数据接入：厂商 HcMsgParserLaunchNode（厂商源码未改动） ----------
+# 把串口/UDP/CAN 原始字节流解析为 /chcnav/hc_sentence
+/chcnav_msg_parser:
+  ros__parameters:
+    type: serial            # serial | tcp | tcp_server | udp | can | file
+    port: /dev/ttyUSB0      # type=serial 时的串口路径（RS232 / USB 转串口）
+    baudrate: 460800        # 波特率，必须与 CGI-410 的输出配置一致
+    rate: 1000              # 每秒最大解析协议数
+
+# 紧随其后的 HcCgiProtocolProcessNode 由厂商提供、源码未改动、无参数，
+# 负责把 /chcnav/hc_sentence 解成 /chcnav/devpvt，无需在此配置。
+
+
+# ---------- 自定义桥：ChcnavFsdBridge（本项目开发） ----------
+# /chcnav/devpvt -> /chcnav/odometry + /chcnav/velocity
+/chcnav_fsd_bridge:
+  ros__parameters:
+    # --- 话题名 ---
+    input_topic: /chcnav/devpvt            # 输入：厂商驱动解析结果
+    odometry_topic: /chcnav/odometry       # 输出：nav_msgs/Odometry（供 FSD 定位 EKF）
+    velocity_topic: /chcnav/velocity       # 输出：geometry_msgs/TwistStamped（供 FSD 控制器）
+
+    # --- 坐标系 ---
+    # 本节点不发布 TF；odom -> base_link 由 FSD 的 robot_localization EKF 独占发布
+    odom_frame: odom
+    base_frame: base_link
+
+    # --- 局部 ENU 原点（经纬高） ---
+    # .nan = 自动取首个有效定位作为原点（推荐）；也可填车队统一原点以对齐多车坐标系
+    origin_lat: .nan
+    origin_lon: .nan
+    origin_alt: .nan
+
+    # --- 定位质量门限 ---
+    # 低于该状态不发布 FSD 话题：0 不过滤 | 1 单点 | 4/8 RTK 固定解 | 5/9 RTK 浮点
+    # 台架无天线调试可临时设 0
+    min_gnss_status: 1
+
+    # --- 安装角标定偏置(deg) ---
+    # 默认 0；实车比对 FSD 航向与水平度后再微调
+    roll_offset_deg: 0.0
+    pitch_offset_deg: 0.0
+    yaw_offset_deg: 0.0
+
+
+# ---------- 运行期数据日志：ChcnavDataLogger（本项目开发） ----------
+# 只订阅话题、不发布、不占 TF，默认随桥一起启动；运行结束后直接看文本回放：
+#   less <包>/log/latest/devpvt.log
+# 关闭本次记录：scripts/start_chcnav_fsd.sh --no-log
+/chcnav_data_logger:
+  ros__parameters:
+    # 日志根目录，留空/相对路径均可；脚本会传入 <包>/log（绝对路径）
+    output_dir: log
+
+    # 记录风格：brief 关键字段（默认，人看/省空间） | full 全字段（排查用）
+    style: brief
+
+    # 要记录的话题（短名，逗号分隔，不要空格）
+    # 可选: devpvt devimu hc_sentence nmea_sentence bestpos heading odometry velocity
+    topics: devpvt,odometry,velocity
+
+    # 落盘节奏与上限
+    flush_interval_s: 1.0    # 每 N 秒 flush 一次（崩溃最多丢这么多）
+    rotate_max_mb: 200       # 单文件超过该大小切分 part（devpvt_part002.log）
+
+    # 是否把各节点 WARN 及以上日志收进 events.log
+    rosout: true
