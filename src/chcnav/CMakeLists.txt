@@ -6,7 +6,9 @@ message(STATUS "-- USE CHCNAV ROS DRIVER --")
 message(STATUS "---------------------------")
 message(STATUS "ROS Distro: $ENV{ROS_DISTRO}")
 
-set(CMAKE_BUILD_TYPE Debug)
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
 
 # Default to C++14
 if(NOT CMAKE_CXX_STANDARD)
@@ -166,7 +168,7 @@ endforeach(SINGLE_NODE_FILE)
 
 # Install directories
 # config/ 存放自定义桥的调参文件 chcnav_fsd_bridge.yaml
-install(DIRECTORY include/ launch/ lib/ readme/ scripts/ config/
+install(DIRECTORY include/ launch/ lib/ scripts/ config/
     DESTINATION share/${PROJECT_NAME}
 )
 

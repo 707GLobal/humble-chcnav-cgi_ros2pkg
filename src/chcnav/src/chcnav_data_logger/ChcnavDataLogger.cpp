@@ -1,4 +1,4 @@
-// ChcnavDataLogger：运行期数据文本日志节点（人看优先）
+// ChcnavDataLogger：运行期数据文本日志节点
 //
 // 本节点为项目自定义开发（不属于厂商 demo 示例）。目标是把运行期间的话题数据
 // 落成「人可直接阅读」的文本日志，运行结束后 less / tail -f 即可回看：
@@ -11,7 +11,7 @@
 //
 // 分类原则：目录分会话，文件名分话题，events.log 单独收事件。
 //
-// 设计约束（不影响原有功能）：
+// 设计约束：
 //   1. 只做订阅，不发布任何话题、不占用 TF、不改变任何现有节点的行为。
 //   2. 写盘失败只在 events.log / stderr 提示，节点继续存活，绝不拖垮整条链路。
 //   3. 默认订阅三个 FSD 相关话题，可用参数 topics 增减。
@@ -35,7 +35,6 @@
 #include <nav_msgs/msg/odometry.hpp>
 #include <rcl_interfaces/msg/log.hpp>
 #include <rclcpp/rclcpp.hpp>
-#include <std_msgs/msg/header.hpp>
 
 #include <msg_interfaces/msg/bestpos.hpp>
 #include <msg_interfaces/msg/hcinspvatzcb.hpp>
@@ -50,7 +49,10 @@ namespace chcnav_data_logger
 namespace
 {
 
-constexpr int kRosoutWarn = 30;  // rcl_interfaces/msg/Log: DEBUG=10 INFO=20 WARN=30 ERROR=40 FATAL=50
+// rcl_interfaces/msg/Log: DEBUG=10 INFO=20 WARN=30 ERROR=40 FATAL=50
+constexpr int kRosoutWarn = 30;
+constexpr int kRosoutError = 40;
+constexpr int kRosoutFatal = 50;
 
 // printf 到 std::string
 template <typename... Args>
@@ -185,6 +187,8 @@ class TextSink
 public:
   TextSink(std::string dir, std::string base, size_t rotate_bytes)
   : dir_(std::move(dir)), base_(std::move(base)), rotate_bytes_(rotate_bytes) {}
+
+  ~TextSink() {close();}  // RAII：节点退出时自动落盘关闭
 
   void setHeader(const std::string & header) {header_ = header;}
 
@@ -322,16 +326,6 @@ const TopicSpec kTopicTable[] = {
   {"velocity", "/chcnav/velocity", Kind::Velocity},
 };
 
-std::string trimTopic(const std::string & s)
-{
-  const size_t b = s.find_first_not_of(" \t");
-  if (b == std::string::npos) {
-    return "";
-  }
-  const size_t e = s.find_last_not_of(" \t");
-  return s.substr(b, e - b + 1);
-}
-
 // ---------------------------------------------------------------------------
 class ChcnavDataLogger : public rclcpp::Node
 {
@@ -350,7 +344,10 @@ public:
     full_ = (style_ == "full");
     rotate_bytes_ = static_cast<size_t>(std::max(rotate_max_mb_, 1)) * 1024 * 1024;
 
-    session_dir_ = output_dir_ + "/" + sessionStamp();
+    const std::string stamp = sessionStamp();
+    const std::string topics_str = toString(topics_);
+
+    session_dir_ = output_dir_ + "/" + stamp;
     if (!makeDirs(session_dir_)) {
       RCLCPP_ERROR(
         get_logger(), "无法创建日志目录 %s，本次不做任何记录（不影响其它节点）",
@@ -362,18 +359,18 @@ public:
 
     const std::string boot = fmt(
       "# chcnav 数据日志 | 会话 %s | 样式 %s | 话题 %s | 轮转 %d MB | 每 %.1fs flush\n",
-      sessionStamp().c_str(), style_.c_str(), toString(topics_).c_str(),
+      stamp.c_str(), style_.c_str(), topics_str.c_str(),
       rotate_max_mb_, flush_interval_s_);
 
     events_ = std::make_shared<TextSink>(session_dir_, "events", rotate_bytes_);
     events_->setHeader(boot);
     event("INFO", "logger", fmt(
       "启动: 目录=%s 样式=%s 话题=%s rosout=%s",
-      session_dir_.c_str(), style_.c_str(), toString(topics_).c_str(),
+      session_dir_.c_str(), style_.c_str(), topics_str.c_str(),
       enable_rosout_ ? "on" : "off"));
 
     for (const auto & raw : topics_) {
-      addTopic(trimTopic(raw), boot);
+      addTopic(raw, boot);
     }
 
     if (enable_rosout_) {
@@ -388,7 +385,7 @@ public:
 
     RCLCPP_INFO(
       get_logger(), "数据日志已开启: %s (样式 %s, 话题 %s)",
-      session_dir_.c_str(), style_.c_str(), toString(topics_).c_str());
+      session_dir_.c_str(), style_.c_str(), topics_str.c_str());
   }
 
   ~ChcnavDataLogger() override
@@ -403,14 +400,7 @@ public:
     }
     event("INFO", "logger", fmt("退出: 各话题帧数%s", summary.c_str()));
     flushAll();
-    if (events_) {
-      events_->close();
-    }
-    for (auto & tl : topic_loggers_) {
-      if (tl->sink) {
-        tl->sink->close();
-      }
-    }
+    // 各 TextSink 由自身析构函数负责 flush + close（RAII）
   }
 
 private:
@@ -443,7 +433,8 @@ private:
 
   bool findSpec(const std::string & raw, TopicSpec & out) const
   {
-    std::string key = trimTopic(raw);
+    // topics_ 来自 splitList，token 不含空白；允许带前导 '/'
+    std::string key = raw;
     if (!key.empty() && key[0] == '/') {
       key = key.substr(1);
     }
@@ -477,46 +468,41 @@ private:
     const std::string topic = spec.topic;
     switch (spec.kind) {
       case Kind::Devpvt:
-        subs_.push_back(create_subscription<msg_interfaces::msg::Hcinspvatzcb>(
-          topic, rclcpp::QoS(1000),
-          [this, tl](msg_interfaces::msg::Hcinspvatzcb::ConstSharedPtr m) {onDevpvt(tl, *m);}));
+        addSub<msg_interfaces::msg::Hcinspvatzcb>(topic, tl, &ChcnavDataLogger::onDevpvt);
         break;
       case Kind::Devimu:
-        subs_.push_back(create_subscription<msg_interfaces::msg::Hcrawimub>(
-          topic, rclcpp::QoS(1000),
-          [this, tl](msg_interfaces::msg::Hcrawimub::ConstSharedPtr m) {onDevimu(tl, *m);}));
+        addSub<msg_interfaces::msg::Hcrawimub>(topic, tl, &ChcnavDataLogger::onDevimu);
         break;
       case Kind::HcSentence:
-        subs_.push_back(create_subscription<msg_interfaces::msg::HcSentence>(
-          topic, rclcpp::QoS(1000),
-          [this, tl](msg_interfaces::msg::HcSentence::ConstSharedPtr m) {onHcSentence(tl, *m);}));
+        addSub<msg_interfaces::msg::HcSentence>(topic, tl, &ChcnavDataLogger::onHcSentence);
         break;
       case Kind::Nmea:
-        subs_.push_back(create_subscription<msg_interfaces::msg::String>(
-          topic, rclcpp::QoS(1000),
-          [this, tl](msg_interfaces::msg::String::ConstSharedPtr m) {onNmea(tl, *m);}));
+        addSub<msg_interfaces::msg::String>(topic, tl, &ChcnavDataLogger::onNmea);
         break;
       case Kind::Bestpos:
-        subs_.push_back(create_subscription<msg_interfaces::msg::BESTPOS>(
-          topic, rclcpp::QoS(1000),
-          [this, tl](msg_interfaces::msg::BESTPOS::ConstSharedPtr m) {onBestpos(tl, *m);}));
+        addSub<msg_interfaces::msg::BESTPOS>(topic, tl, &ChcnavDataLogger::onBestpos);
         break;
       case Kind::Heading:
-        subs_.push_back(create_subscription<msg_interfaces::msg::HEADING>(
-          topic, rclcpp::QoS(1000),
-          [this, tl](msg_interfaces::msg::HEADING::ConstSharedPtr m) {onHeading(tl, *m);}));
+        addSub<msg_interfaces::msg::HEADING>(topic, tl, &ChcnavDataLogger::onHeading);
         break;
       case Kind::Odometry:
-        subs_.push_back(create_subscription<nav_msgs::msg::Odometry>(
-          topic, rclcpp::QoS(1000),
-          [this, tl](nav_msgs::msg::Odometry::ConstSharedPtr m) {onOdometry(tl, *m);}));
+        addSub<nav_msgs::msg::Odometry>(topic, tl, &ChcnavDataLogger::onOdometry);
         break;
       case Kind::Velocity:
-        subs_.push_back(create_subscription<geometry_msgs::msg::TwistStamped>(
-          topic, rclcpp::QoS(1000),
-          [this, tl](geometry_msgs::msg::TwistStamped::ConstSharedPtr m) {onVelocity(tl, *m);}));
+        addSub<geometry_msgs::msg::TwistStamped>(topic, tl, &ChcnavDataLogger::onVelocity);
         break;
     }
+  }
+
+  // 订阅样板收敛：各话题仅消息类型与回调函数不同
+  template <typename MsgT>
+  void addSub(
+    const std::string & topic, const std::shared_ptr<TopicLogger> & tl,
+    void (ChcnavDataLogger::* fn)(const std::shared_ptr<TopicLogger> &, const MsgT &))
+  {
+    subs_.push_back(create_subscription<MsgT>(
+      topic, rclcpp::QoS(1000),
+      [this, tl, fn](typename MsgT::ConstSharedPtr m) {(this->*fn)(tl, *m);}));
   }
 
   // ---------------- /rosout：把各节点 WARN 及以上收进 events.log ----------------
@@ -526,9 +512,9 @@ private:
       return;
     }
     const char * level = "WARN";
-    if (msg->level >= 50) {
+    if (msg->level >= kRosoutFatal) {
       level = "FATAL";
-    } else if (msg->level >= 40) {
+    } else if (msg->level >= kRosoutError) {
       level = "ERROR";
     }
     event(level, msg->name, msg->msg);

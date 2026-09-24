@@ -23,7 +23,7 @@
 #
 # 它会:
 #   1. 检查 ROS 环境与串口设备（存在、可读写）
-#   2. 按需 colcon build（缺产物 / 桥源码或 CMakeLists 有更新）
+#   2. 按需 colcon build（缺产物 / 桥源码、消息接口或 CMakeLists 有更新）
 #   3. 前台运行整条链路（Ctrl-C 退出）
 #
 # 之后另开终端查看:
@@ -198,6 +198,7 @@ if [ ! -f "$WS_DIR/src/chcnav/package.xml" ]; then
 fi
 echo "    工作空间: $WS_DIR"
 BIN="$WS_DIR/install/chcnav/lib/chcnav/$BIN_NAME"
+LOGGER_BIN="$WS_DIR/install/chcnav/lib/chcnav/ChcnavDataLogger"
 
 if [ "$TYPE" = "serial" ]; then
   if [ ! -e "$PORT" ]; then
@@ -222,11 +223,12 @@ case "$DO_BUILD" in
   yes) need_build="1" ;;
   no)  need_build="0" ;;
   auto)
-    if [ ! -x "$BIN" ]; then
+    if [ ! -x "$BIN" ] || [ ! -x "$LOGGER_BIN" ]; then
       need_build="1"
     elif [ "$PKG_DIR/src/chcnav_fsd_bridge/ChcnavFsdBridge.cpp" -nt "$BIN" ] \
       || [ "$PKG_DIR/src/chcnav_data_logger/ChcnavDataLogger.cpp" -nt "$BIN" ] \
-      || [ "$PKG_DIR/CMakeLists.txt" -nt "$BIN" ]; then
+      || [ "$PKG_DIR/CMakeLists.txt" -nt "$BIN" ] \
+      || [ -n "$(find "$WS_DIR/src/msg_interfaces/msg" -name '*.msg' -newer "$BIN" 2>/dev/null)" ]; then
       need_build="1"
     fi
     ;;

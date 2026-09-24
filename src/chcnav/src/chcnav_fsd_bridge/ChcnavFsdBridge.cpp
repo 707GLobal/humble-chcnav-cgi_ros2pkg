@@ -128,18 +128,20 @@ private:
       RCLCPP_INFO(
         get_logger(), "局部 ENU 原点: lat=%.9f lon=%.9f alt=%.3f",
         origin_lat_, origin_lon_, origin_alt_);
+
+      // 原点固定后投影常量只需算一次，不必每帧重算
+      const double lat0_rad = origin_lat_ * kDeg2Rad;
+      const double sin_lat0 = std::sin(lat0_rad);
+      const double e2 = kWgs84F * (2.0 - kWgs84F);
+      const double w = 1.0 - e2 * sin_lat0 * sin_lat0;
+      rn_ = kWgs84A / std::sqrt(w);                    // 卯酉圈曲率半径
+      rm_ = kWgs84A * (1.0 - e2) / std::pow(w, 1.5);   // 子午圈曲率半径
+      cos_lat0_ = std::cos(lat0_rad);
     }
 
-    // --- 经纬高 -> 局部 ENU 切平面 ---
-    const double lat0_rad = origin_lat_ * kDeg2Rad;
-    const double sin_lat0 = std::sin(lat0_rad);
-    const double e2 = kWgs84F * (2.0 - kWgs84F);
-    const double w = 1.0 - e2 * sin_lat0 * sin_lat0;
-    const double rn = kWgs84A / std::sqrt(w);                     // 卯酉圈曲率半径
-    const double rm = kWgs84A * (1.0 - e2) / std::pow(w, 1.5);     // 子午圈曲率半径
-
-    const double east = (msg->longitude - origin_lon_) * kDeg2Rad * rn * std::cos(lat0_rad);
-    const double north = (msg->latitude - origin_lat_) * kDeg2Rad * rm;
+    // --- 经纬高 -> 局部 ENU 切平面（投影常量已在定原点时算好） ---
+    const double east = (msg->longitude - origin_lon_) * kDeg2Rad * rn_ * cos_lat0_;
+    const double north = (msg->latitude - origin_lat_) * kDeg2Rad * rm_;
     const double up = static_cast<double>(msg->altitude) - origin_alt_;
 
     // --- 姿态：devpvt.yaw 为车体坐标系双天线航向，[-180,180] 逆时针为正，与 REP-103 一致 ---
@@ -243,6 +245,11 @@ private:
   double origin_lon_ = 0.0;
   double origin_alt_ = 0.0;
   bool origin_ready_ = false;
+
+  // 投影常量，定原点时算一次（见 onDevpvt）
+  double cos_lat0_ = 1.0;
+  double rn_ = 0.0;
+  double rm_ = 0.0;
 
   int min_gnss_status_ = 1;
 

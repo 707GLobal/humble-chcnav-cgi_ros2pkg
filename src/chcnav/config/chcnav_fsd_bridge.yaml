@@ -1,5 +1,5 @@
 # ============================================================
-# 华测 CGI 组合导航 -> FSD 桥   参数配置（唯一调参入口）
+# 华测 CGI 组合导航 -> FSD 桥   参数配置
 #
 # 使用方：launch/chcnav_fsd_bridge.launch.py
 # 启动：  scripts/start_chcnav_fsd.sh（一键，含环境/串口检查与按需构建）
@@ -11,7 +11,7 @@
 # ============================================================
 
 
-# ---------- 数据接入：厂商 HcMsgParserLaunchNode（厂商源码未改动） ----------
+# ---------- 数据接入：厂商 HcMsgParserLaunchNode ----------
 # 把串口/UDP/CAN 原始字节流解析为 /chcnav/hc_sentence
 /chcnav_msg_parser:
   ros__parameters:
@@ -24,7 +24,7 @@
 # 负责把 /chcnav/hc_sentence 解成 /chcnav/devpvt，无需在此配置。
 
 
-# ---------- 自定义桥：ChcnavFsdBridge（本项目开发） ----------
+# ---------- 自定义桥：ChcnavFsdBridge ----------
 # /chcnav/devpvt -> /chcnav/odometry + /chcnav/velocity
 /chcnav_fsd_bridge:
   ros__parameters:
@@ -56,7 +56,7 @@
     yaw_offset_deg: 0.0
 
 
-# ---------- 运行期数据日志：ChcnavDataLogger（本项目开发） ----------
+# ---------- 运行期数据日志：ChcnavDataLogger ----------
 # 只订阅话题、不发布、不占 TF，默认随桥一起启动；运行结束后直接看文本回放：
 #   less <包>/log/latest/devpvt.log
 # 关闭本次记录：scripts/start_chcnav_fsd.sh --no-log

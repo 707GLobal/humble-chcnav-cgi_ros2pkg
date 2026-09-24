@@ -189,50 +189,42 @@ def generate_launch_description():
         else default_log_dir()
     )
 
-    return LaunchDescription([
-        DeclareLaunchArgument(
-            'cfg_file', default_value=cfg_default,
-            description='参数配置文件，默认 config/' + CFG_BASENAME),
+    # 表驱动声明全部 launch 参数：('参数名', 默认值, 说明)
+    arg_specs = [
+        ('type', d('type', 'serial'),
+         '数据源类型，默认 serial'),
+        ('port', d('port', '/dev/ttyUSB0'),
+         '串口路径（RS232 / USB 转串口）'),
+        ('baudrate', d('baudrate', '460800'),
+         '波特率，需与 CGI-410 输出配置一致'),
+        ('rate', d('rate', '1000'),
+         '节点每秒最大解析协议数'),
 
-        DeclareLaunchArgument(
-            'type', default_value=d('type', 'serial'),
-            description='数据源类型，默认 serial'),
-        DeclareLaunchArgument(
-            'port', default_value=d('port', '/dev/ttyUSB0'),
-            description='串口路径（RS232 / USB 转串口）'),
-        DeclareLaunchArgument(
-            'baudrate', default_value=d('baudrate', '460800'),
-            description='波特率，需与 CGI-410 输出配置一致'),
-        DeclareLaunchArgument(
-            'rate', default_value=d('rate', '1000'),
-            description='节点每秒最大解析协议数'),
-
-        DeclareLaunchArgument(
-            'min_gnss_status', default_value=d('min_gnss_status', '1'),
-            description='低于该 GNSS 状态不发布 FSD 话题；4/8 为 RTK 固定解，0 为不过滤'),
-        DeclareLaunchArgument(
-            'roll_offset_deg', default_value=d('roll_offset_deg', '0.0'),
-            description='横滚安装角标定偏置(deg)'),
-        DeclareLaunchArgument(
-            'pitch_offset_deg', default_value=d('pitch_offset_deg', '0.0'),
-            description='俯仰安装角标定偏置(deg)'),
-        DeclareLaunchArgument(
-            'yaw_offset_deg', default_value=d('yaw_offset_deg', '0.0'),
-            description='航向安装角标定偏置(deg)'),
+        ('min_gnss_status', d('min_gnss_status', '1'),
+         '低于该 GNSS 状态不发布 FSD 话题；4/8 为 RTK 固定解，0 为不过滤'),
+        ('roll_offset_deg', d('roll_offset_deg', '0.0'),
+         '横滚安装角标定偏置(deg)'),
+        ('pitch_offset_deg', d('pitch_offset_deg', '0.0'),
+         '俯仰安装角标定偏置(deg)'),
+        ('yaw_offset_deg', d('yaw_offset_deg', '0.0'),
+         '航向安装角标定偏置(deg)'),
 
         # --- 运行期数据日志（ChcnavDataLogger）---
-        DeclareLaunchArgument(
-            'log', default_value='true',
-            description='是否随桥启动数据日志节点；false 表示本次不记录'),
-        DeclareLaunchArgument(
-            'log_dir', default_value=log_dir_default,
-            description='日志根目录，本次会话自动建 <log_dir>/YYYYmmdd_HHMMSS/'),
-        DeclareLaunchArgument(
-            'log_style', default_value=dl('style', 'brief'),
-            description='记录风格：brief 关键字段（默认）| full 全字段'),
-        DeclareLaunchArgument(
-            'log_topics', default_value=dl('topics', 'devpvt,odometry,velocity'),
-            description='要记录的话题短名，逗号分隔'),
+        ('log', 'true',
+         '是否随桥启动数据日志节点；false 表示本次不记录'),
+        ('log_dir', log_dir_default,
+         '日志根目录，本次会话自动建 <log_dir>/YYYYmmdd_HHMMSS/'),
+        ('log_style', dl('style', 'brief'),
+         '记录风格：brief 关键字段（默认）| full 全字段'),
+        ('log_topics', dl('topics', 'devpvt,odometry,velocity'),
+         '要记录的话题短名，逗号分隔'),
+    ]
 
-        OpaqueFunction(function=_launch_setup),
-    ])
+    return LaunchDescription(
+        [DeclareLaunchArgument(
+            'cfg_file', default_value=cfg_default,
+            description='参数配置文件，默认 config/' + CFG_BASENAME)]
+        + [DeclareLaunchArgument(name, default_value=value, description=desc)
+           for name, value, desc in arg_specs]
+        + [OpaqueFunction(function=_launch_setup)]
+    )
