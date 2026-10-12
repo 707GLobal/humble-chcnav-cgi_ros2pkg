@@ -50,7 +50,10 @@
     min_gnss_status: 1
 
     # --- 安装角标定偏置(deg) ---
-    # 默认 0；实车比对 FSD 航向与水平度后再微调
+    # 桥内自动将设备北向零度 yaw 转成 ENU 东向零度 yaw（+90°）。
+    # 默认 0；不要用 yaw_offset_deg 再补一次 90°。
+    # 两个输出话题的线速度均来自 ENU，经发布的姿态反向旋转到 base_link：
+    # x=前进，y=向左，z=向上，单位 m/s；不使用可能全零的 vehicle_linear_velocity。
     roll_offset_deg: 0.0
     pitch_offset_deg: 0.0
     yaw_offset_deg: 0.0

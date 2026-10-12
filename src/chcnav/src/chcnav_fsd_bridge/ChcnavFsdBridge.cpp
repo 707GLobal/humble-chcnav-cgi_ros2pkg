@@ -22,11 +22,14 @@
 #include <cmath>
 #include <memory>
 #include <string>
+#include <stdexcept>
 
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <tf2/LinearMath/Quaternion.h>
+#include <tf2/LinearMath/Matrix3x3.h>
+#include <tf2/LinearMath/Vector3.h>
 
 #include <msg_interfaces/msg/hcinspvatzcb.hpp>
 
@@ -50,7 +53,8 @@ constexpr double kMinAngularVelStd = 0.02;  // rad/s
 
 double variance(double std_dev, double floor_std)
 {
-  const double s = std::max(std_dev, floor_std);
+  const double s = std::isfinite(std_dev) && std_dev >= 0.0
+    ? std::max(std_dev, floor_std) : floor_std;
   return s * s;
 }
 
@@ -80,6 +84,10 @@ public:
     roll_offset_deg_ = declare_parameter<double>("roll_offset_deg", 0.0);
     pitch_offset_deg_ = declare_parameter<double>("pitch_offset_deg", 0.0);
     yaw_offset_deg_ = declare_parameter<double>("yaw_offset_deg", 0.0);
+    if (!std::isfinite(roll_offset_deg_) || !std::isfinite(pitch_offset_deg_) ||
+      !std::isfinite(yaw_offset_deg_)) {
+      throw std::invalid_argument("INS installation angle offsets must be finite");
+    }
 
     odometry_pub_ = create_publisher<nav_msgs::msg::Odometry>(odometry_topic_, 10);
     velocity_pub_ = create_publisher<geometry_msgs::msg::TwistStamped>(velocity_topic_, 10);
@@ -93,6 +101,9 @@ public:
       "Chcnav FSD bridge: %s -> %s / %s (frame %s -> %s, min_gnss_status=%d)",
       input_topic_.c_str(), odometry_topic_.c_str(), velocity_topic_.c_str(),
       odom_frame_.c_str(), base_frame_.c_str(), min_gnss_status_);
+    RCLCPP_INFO(get_logger(),
+      "FSD linear velocity source: ENU rotated into base_link; "
+      "ENU yaw = device yaw + 90 deg + yaw_offset_deg (east-zero, CCW).");
   }
 
 private:
@@ -107,9 +118,26 @@ private:
     }
 
     if (!std::isfinite(msg->latitude) || !std::isfinite(msg->longitude) ||
-      !std::isfinite(msg->altitude))
+      !std::isfinite(msg->altitude) || !std::isfinite(msg->roll) ||
+      !std::isfinite(msg->pitch) || !std::isfinite(msg->yaw) ||
+      !std::isfinite(msg->enu_velocity.x) || !std::isfinite(msg->enu_velocity.y) ||
+      !std::isfinite(msg->enu_velocity.z) ||
+      !std::isfinite(msg->vehicle_angular_velocity.x) ||
+      !std::isfinite(msg->vehicle_angular_velocity.y) ||
+      !std::isfinite(msg->vehicle_angular_velocity.z))
     {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+        "Rejecting non-finite INS pose/ENU velocity/angular velocity; no FSD output.");
       return;
+    }
+
+    for (int axis = 0; axis < 3; ++axis) {
+      if (!std::isfinite(msg->position_stdev[axis]) || msg->position_stdev[axis] < 0.0 ||
+        !std::isfinite(msg->euler_stdev[axis]) || msg->euler_stdev[axis] < 0.0) {
+        RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+          "Rejecting invalid INS pose standard deviations; no FSD output.");
+        return;
+      }
     }
 
     if (!origin_ready_) {
@@ -144,18 +172,25 @@ private:
     const double north = (msg->latitude - origin_lat_) * kDeg2Rad * rm_;
     const double up = static_cast<double>(msg->altitude) - origin_alt_;
 
-    // --- 姿态：devpvt.yaw 为车体坐标系双天线航向，[-180,180] 逆时针为正，与 REP-103 一致 ---
+    // 设备 yaw 以北向为零、逆时针为正；ENU 的 ROS yaw 以东向为零。
+    // 安装角偏置在参考轴转换后叠加。roll/pitch 沿用现有安装标定。
     tf2::Quaternion q;
     q.setRPY(
       (static_cast<double>(msg->roll) + roll_offset_deg_) * kDeg2Rad,
       (static_cast<double>(msg->pitch) + pitch_offset_deg_) * kDeg2Rad,
-      (static_cast<double>(msg->yaw) + yaw_offset_deg_) * kDeg2Rad);
+      (90.0 + static_cast<double>(msg->yaw) + yaw_offset_deg_) * kDeg2Rad);
     q.normalize();
 
-    // --- 车体坐标系速度 (m/s) 与角速度 (deg/s -> rad/s) ---
-    const double vx = msg->vehicle_linear_velocity.x;
-    const double vy = msg->vehicle_linear_velocity.y;
-    const double vz = msg->vehicle_linear_velocity.z;
+    // ENU 速度有效而 vehicle_linear_velocity 在实车中可能全零。统一从 ENU
+    // 矢量转换，保留前进/倒车、侧向和垂向分量；不能把 speed 标量直接作 vx。
+    // 与发布的 pose 共用同一姿态：v_body = R_ENU_from_body^T * v_ENU。
+    const tf2::Matrix3x3 enu_from_body(q);
+    const tf2::Matrix3x3 body_from_enu = enu_from_body.transpose();
+    const tf2::Vector3 v_body = body_from_enu * tf2::Vector3(
+      msg->enu_velocity.x, msg->enu_velocity.y, msg->enu_velocity.z);
+    const double vx = v_body.x();
+    const double vy = v_body.y();
+    const double vz = v_body.z();
     const double wx = static_cast<double>(msg->vehicle_angular_velocity.x) * kDeg2Rad;
     const double wy = static_cast<double>(msg->vehicle_angular_velocity.y) * kDeg2Rad;
     const double wz = static_cast<double>(msg->vehicle_angular_velocity.z) * kDeg2Rad;
@@ -179,7 +214,7 @@ private:
     odom.twist.twist.angular.x = wx;
     odom.twist.twist.angular.y = wy;
     odom.twist.twist.angular.z = wz;
-    fillTwistCovariance(odom.twist.covariance);
+    fillTwistCovariance(odom.twist.covariance, msg, body_from_enu);
 
     // --- /chcnav/velocity ---
     geometry_msgs::msg::TwistStamped vel;
@@ -218,15 +253,29 @@ private:
     cov[35] = var_yaw;
   }
 
-  static void fillTwistCovariance(std::array<double, 36> & cov)
+  static void fillTwistCovariance(
+    std::array<double, 36> & cov,
+    const msg_interfaces::msg::Hcinspvatzcb::ConstSharedPtr & msg,
+    const tf2::Matrix3x3 & body_from_enu)
   {
     std::fill(cov.begin(), cov.end(), 0.0);
-    // 设备未提供车体坐标系速度标准差（只有 ENU 方向），此处取保守常数
-    const double var_linear = kMinLinearVelStd * kMinLinearVelStd;
+    // ENU 对角协方差同步旋转至车体坐标系，保留旋转产生的非对角项。
+    // 设备未提供 ENU 方向间相关项；无效标准差用较保守的 1 m/s 兜底。
+    std::array<double, 3> enu_variance;
+    for (int axis = 0; axis < 3; ++axis) {
+      const double s = msg->enu_velocity_stdev[axis];
+      enu_variance[axis] = std::isfinite(s) && s >= 0.0
+        ? variance(s, kMinLinearVelStd) : 1.0;
+    }
+    for (int row = 0; row < 3; ++row) {
+      for (int col = 0; col < 3; ++col) {
+        for (int axis = 0; axis < 3; ++axis) {
+          cov[row * 6 + col] += body_from_enu[row][axis] *
+            enu_variance[axis] * body_from_enu[col][axis];
+        }
+      }
+    }
     const double var_angular = kMinAngularVelStd * kMinAngularVelStd;
-    cov[0] = var_linear;
-    cov[7] = var_linear;
-    cov[14] = var_linear;
     cov[21] = var_angular;
     cov[28] = var_angular;
     cov[35] = var_angular;

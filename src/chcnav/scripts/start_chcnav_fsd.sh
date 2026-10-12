@@ -38,6 +38,10 @@
 #   scripts/view_chcnav_log.sh -h       # 查看脚本
 set -euo pipefail
 
+# ROS Humble's Python extensions must use the system Python 3.10 ABI.
+export PATH="/usr/bin:$PATH"
+export PYTHONNOUSERSITE=1
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # chcnav/scripts
 PKG_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"                     # chcnav 功能包目录
 CFG="$PKG_DIR/config/chcnav_fsd_bridge.yaml"                # 参数文件默认位置
@@ -213,6 +217,16 @@ if [ "$TYPE" = "serial" ]; then
     exit 1
   fi
   echo "    串口: $PORT 就绪 ($(ls -l "$PORT" | awk '{print $1, $3, $4}'))"
+  # Keep the lock across exec/ROS launch; resolve aliases to the same device.
+  # The /proc check also catches readers started outside this script.
+  mkdir -p "$WS_DIR/.runtime"
+  PORT_KEY="$(stat -Lc '%t_%T' "$PORT")"
+  exec {INS_LOCK_FD}>"$WS_DIR/.runtime/serial_${PORT_KEY}.lock"
+  flock -n "$INS_LOCK_FD" || {
+    echo "[失败] 已有华测启动脚本持有 $PORT；请停止原链路或用总脚本 --reuse-ins" >&2
+    exit 1
+  }
+  /usr/bin/python3 "$SCRIPT_DIR/check_serial_port.py" "$PORT"
 else
   echo "    type=$TYPE，跳过串口检查（请自行确认数据源可达）"
 fi
@@ -236,7 +250,13 @@ esac
 
 if [ "$need_build" = "1" ]; then
   echo "    colcon build --packages-select msg_interfaces chcnav"
-  (cd "$WS_DIR" && colcon build --packages-select msg_interfaces chcnav)
+  (cd "$WS_DIR" && colcon build --packages-select msg_interfaces chcnav \
+    --cmake-clean-cache --cmake-args \
+    -DPython3_EXECUTABLE=/usr/bin/python3 \
+    -DPYTHON_EXECUTABLE=/usr/bin/python3 \
+    -DPYTHON_INCLUDE_DIR=/usr/include/python3.10 \
+    -DPYTHON_LIBRARY=/usr/lib/x86_64-linux-gnu/libpython3.10.so \
+    -DPYTHON_INSTALL_DIR=lib/python3.10/site-packages)
 else
   echo "    跳过（产物已是最新；强制重建用 --build）"
 fi
@@ -305,4 +325,7 @@ if [ "$DRY_RUN" = "1" ]; then
   exit 0
 fi
 
+if [ "$TYPE" = "serial" ]; then
+  /usr/bin/python3 "$SCRIPT_DIR/check_serial_port.py" "$PORT"
+fi
 exec ros2 launch "$LAUNCH_FILE" "${LAUNCH_ARGS[@]}"

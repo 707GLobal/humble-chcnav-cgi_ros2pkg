@@ -61,3 +61,6 @@ __pycache__/
 *.tmp
 install/
 log/
+
+# Local runtime state
+.runtime/

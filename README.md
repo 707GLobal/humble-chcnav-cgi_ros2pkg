@@ -180,6 +180,15 @@ ros2 launch chcnav demo_1.py     # 单独验证原厂串口链路
 - 协方差取设备上报的标准差，并设下限，防止 EKF 门限失效。
 - 按 `min_gnss_status` 过滤：低于门限不发布（台架无天线时设为 0）。
 
+FSD 的线速度统一使用 `enu_velocity`，按与发布位姿相同的旋转矩阵转换：
+`v_base_link = R_ENU_from_base_linkᵀ × v_ENU`。两个输出话题使用相同的
+twist 和设备时间戳，`linear.x/y/z` 分别为前向、左向、上向速度，保留倒车
+和侧向速度符号。ENU 速度协方差也旋转到车体坐标系。
+设备北向零度、逆时针为正的 `yaw` 先加 90° 转为 ENU 东向零度，再叠加
+`yaw_offset_deg`；该偏置只用于安装标定，不应重复补 90°。
+本次转换保留已有 roll/pitch 与角速度轴标定，完整三维安装轴仍需实车核对。
+固定的 acceleration 路径锚点也仍需对齐赛道的 ENU/map 坐标。
+
 ### 5.2 ChcnavDataLogger
 
 **职责**：只订阅、不发布、不占 TF，把运行期数据落成**人可直接阅读的文本日志**。
