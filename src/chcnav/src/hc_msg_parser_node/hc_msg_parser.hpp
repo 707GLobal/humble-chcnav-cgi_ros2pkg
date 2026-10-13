@@ -15,6 +15,7 @@
 #include "device_connector.hpp"
 #include "hc_msg_parser.h"
 #include "novatel_decode.hpp"
+#include "temporary_ins_diagnostics.hpp"
 
 using namespace std;
 
@@ -100,6 +101,8 @@ public:
 
     bool enable_read = true;
     bool enable_write = true;
+    std::shared_ptr<ins_diag::Recorder> diagnostics = std::make_shared<ins_diag::Recorder>("parser");
+    rclcpp::TimerBase::SharedPtr diagnostics_timer;
 
     /**
      * @brief 构建一个节点
@@ -147,6 +150,10 @@ public:
             this->node_name = node_name;
 
             this->state = 1;
+            if (diagnostics->enabled()) {
+                diagnostics_timer = this->nh->create_wall_timer(std::chrono::seconds(1),
+                    [recorder = diagnostics]() { recorder->tick(); });
+            }
         }
         else
         {
@@ -207,6 +214,11 @@ public:
                 device_connector->judge_connect_state();
                  
                 hc__msg_parser_scan(&this->parser, &this->token);
+                if (token.type == HC__TOKERN_ERROR) diagnostics->add(ins_diag::PARSE_ERRORS);
+                if (token.type == HC__TOKERN_HC_MSG || token.type == HC__TOKERN_HC_SHORT_MSG)
+                    diagnostics->add(ins_diag::CGI_FRAMES); // Framed only; CRC is checked downstream.
+                if (token.type == HC__TOKERN_NMEA_MGS) diagnostics->add(ins_diag::NMEA_FRAMES);
+                if (token.type == HC__TOKERN_NOVATEL_MSG) diagnostics->add(ins_diag::NOVATEL_FRAMES);
 
                 switch (token.type)
                 {
@@ -286,7 +298,19 @@ int parser_read_handler(void *buffer, size_t size, size_t *size_read, void *pars
 {
     hc__msg_parser_node *parser_node = (hc__msg_parser_node *)parser_id;
 
-    int read_size = parser_node->device_connector->read((char *)buffer, size);
+    parser_node->diagnostics->add(ins_diag::READ_CALLS);
+    int read_size;
+    try {
+        read_size = parser_node->device_connector->read((char *)buffer, size);
+    } catch (...) {
+        parser_node->diagnostics->add(ins_diag::READ_ERRORS);
+        throw; // Preserve the driver's original exception behavior.
+    }
+    if (read_size > 0) {
+        parser_node->diagnostics->add(ins_diag::BYTES, read_size);
+        parser_node->diagnostics->input();
+    } else if (read_size == 0) parser_node->diagnostics->add(ins_diag::EMPTY_READS);
+    else parser_node->diagnostics->add(ins_diag::READ_ERRORS);
     if (read_size <= size && read_size > 0)
         *size_read = read_size;
     else
@@ -342,10 +366,12 @@ int msg_recv_callback(hc__single_msg_t single_msg, hc__msg_parser_node *node)
             // 如果校验值与原始值一致则发布
             if (strtol(raw_xor_string, NULL, 16) != xor_check_uchar)
             {
+                node->diagnostics->add(ins_diag::NMEA_XOR_ERRORS);
                 RCLCPP_WARN(node->nh->get_logger(), "NMEA xor check failed: %s", single_msg.value);
             }
             else if((nmea_end_2[0] != '\r') || (nmea_end_2[1] != '\n'))
             {
+                node->diagnostics->add(ins_diag::NMEA_TAIL_ERRORS);
                 RCLCPP_WARN(node->nh->get_logger(), "NMEA tail check failed: %s", single_msg.value);
             }
             else

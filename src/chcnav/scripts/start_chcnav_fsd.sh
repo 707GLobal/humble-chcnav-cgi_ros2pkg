@@ -98,7 +98,7 @@ TYPE="serial"
 PORT="/dev/ttyUSB0"
 BAUD="460800"
 RATE="1000"
-MIN_GNSS_STATUS="1"
+MIN_GNSS_STATUS="0"
 ROLL_OFFSET="0.0"
 PITCH_OFFSET="0.0"
 YAW_OFFSET="0.0"
@@ -327,5 +327,13 @@ fi
 
 if [ "$TYPE" = "serial" ]; then
   /usr/bin/python3 "$SCRIPT_DIR/check_serial_port.py" "$PORT"
+fi
+if [[ "${FSD_INS_DIAGNOSTICS:-1}" == 1 ]]; then
+  export CHCNAV_DIAGNOSTIC_DIR="${CHCNAV_DIAGNOSTIC_DIR:-$LOG_DIR/diagnostics_$(date +%Y%m%d_%H%M%S)_$$}"
+  mkdir -p "$CHCNAV_DIAGNOSTIC_DIR"
+  chmod 700 "$CHCNAV_DIAGNOSTIC_DIR"
+  echo "[INS_DIAG] 临时每秒诊断：$CHCNAV_DIAGNOSTIC_DIR（FSD_INS_DIAGNOSTICS=0 可关闭）"
+else
+  unset CHCNAV_DIAGNOSTIC_DIR
 fi
 exec ros2 launch "$LAUNCH_FILE" "${LAUNCH_ARGS[@]}"

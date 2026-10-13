@@ -4,6 +4,8 @@
 #include "msg_interfaces/msg/hcinspvatzcb.hpp"
 #include "msg_interfaces/msg/hcrawimub.hpp"
 #include "hc_cgi_protocol.h"
+#include "temporary_ins_diagnostics.hpp"
+static std::shared_ptr<ins_diag::Recorder> diagnostics;
 
 static rclcpp::Publisher<msg_interfaces::msg::Hcinspvatzcb>::SharedPtr gs_devpvt_pub;
 static rclcpp::Publisher<msg_interfaces::msg::Hcrawimub>::SharedPtr gs_devimu_pub;
@@ -22,6 +24,12 @@ int main(int argc, char **argv)
     rclcpp::init(argc, argv);
     std::shared_ptr<rclcpp::Node> nh = rclcpp::Node::make_shared("HcCgiProtocolProcessNode");
     std::shared_ptr<rclcpp::Node> private_nh = nh;
+    diagnostics = std::make_shared<ins_diag::Recorder>("protocol");
+    rclcpp::TimerBase::SharedPtr diagnostics_timer;
+    if (diagnostics->enabled()) {
+        diagnostics_timer = nh->create_wall_timer(std::chrono::seconds(1),
+            [recorder = diagnostics]() { recorder->tick(); });
+    }
 
     auto serial_suber = nh->create_subscription<msg_interfaces::msg::HcSentence>("/chcnav/hc_sentence", 1000, hc_sentence_callback);
 
@@ -56,11 +64,18 @@ static void msg_deal__hcpinfonzb(const msg_interfaces::msg::HcSentence::ConstPtr
  * */
 static void hc_sentence_callback(const msg_interfaces::msg::HcSentence::ConstPtr msg)
 {
+    diagnostics->add(ins_diag::CGI_RECEIVED);
+    diagnostics->input();
+    diagnostics->message_id(static_cast<unsigned short>(msg->msg_id));
     if (hc__cgi_check_crc32((uint8_t *)(&msg->data[0]), msg->data.size()) != 0)
     {
+        diagnostics->add(ins_diag::CRC_ERRORS);
         RCLCPP_WARN(rclcpp::get_logger("HcCgiProtocolProcessNode"), "CGI crc32 check failed");
         return;
     }
+    diagnostics->add(ins_diag::CRC_OK);
+    if (msg->msg_id == INSPVATZCB && msg->data.size() != 296)
+        diagnostics->add(ins_diag::PVT_LENGTH_ERRORS);
 
     switch (msg->msg_id)
     {
@@ -194,6 +209,8 @@ static void msg_deal__hcinspvatzcb(const msg_interfaces::msg::HcSentence::ConstP
             devpvt.receiver[index] = *((unsigned char *)(&msg->data[276 + index]));
 
         gs_devpvt_pub->publish(devpvt);
+        diagnostics->add(ins_diag::PVT_PUBLISHED);
+        diagnostics->output();
     }
 }
 

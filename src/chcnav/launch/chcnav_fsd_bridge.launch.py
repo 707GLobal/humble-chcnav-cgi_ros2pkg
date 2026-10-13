@@ -200,7 +200,7 @@ def generate_launch_description():
         ('rate', d('rate', '1000'),
          '节点每秒最大解析协议数'),
 
-        ('min_gnss_status', d('min_gnss_status', '1'),
+        ('min_gnss_status', d('min_gnss_status', '0'),
          '低于该 GNSS 状态不发布 FSD 话题；4/8 为 RTK 固定解，0 为不过滤'),
         ('roll_offset_deg', d('roll_offset_deg', '0.0'),
          '横滚安装角标定偏置(deg)'),

@@ -1,3 +1,4 @@
+#include "temporary_ins_diagnostics.hpp"
 // ChcnavFsdBridge：华测 CGI 组合导航 -> FSD 标准话题桥接节点
 //
 // 本节点为项目自定义开发，不属于厂商 demo 示例（src/demo/ 下的 ChcnavFixDemo 等仅供示范）。
@@ -77,8 +78,8 @@ public:
     origin_lon_param_ = declare_parameter<double>("origin_lon", std::nan(""));
     origin_alt_param_ = declare_parameter<double>("origin_alt", std::nan(""));
 
-    // 低于该 GNSS 状态不发布（4/8 为 RTK 固定解）；置 0 可在无天线时台架调试
-    min_gnss_status_ = declare_parameter<int>("min_gnss_status", 1);
+    // 默认0不因GNSS质量停止发布；任务机另外要求状态4才推进阶段
+    min_gnss_status_ = declare_parameter<int>("min_gnss_status", 0);
 
     // 安装角/符号标定余量，默认 0，按实车实测微调
     roll_offset_deg_ = declare_parameter<double>("roll_offset_deg", 0.0);
@@ -95,6 +96,10 @@ public:
     devpvt_sub_ = create_subscription<msg_interfaces::msg::Hcinspvatzcb>(
       input_topic_, 10,
       [this](const msg_interfaces::msg::Hcinspvatzcb::ConstSharedPtr msg) { onDevpvt(msg); });
+    if (diagnostics_->enabled()) {
+      diagnostics_timer_ = create_wall_timer(std::chrono::seconds(1),
+        [recorder = diagnostics_]() { recorder->tick(); });
+    }
 
     RCLCPP_INFO(
       get_logger(),
@@ -109,7 +114,11 @@ public:
 private:
   void onDevpvt(const msg_interfaces::msg::Hcinspvatzcb::ConstSharedPtr & msg)
   {
+    diagnostics_->add(ins_diag::PVT_RECEIVED);
+    diagnostics_->input();
+    diagnostics_->gnss(msg->stat[1]);
     if (static_cast<int>(msg->stat[1]) < min_gnss_status_) {
+      diagnostics_->add(ins_diag::GNSS_REJECTED);
       RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), 5000,
         "GNSS 状态 %u 低于 min_gnss_status=%d，暂停发布 FSD 话题",
@@ -128,6 +137,7 @@ private:
     {
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
         "Rejecting non-finite INS pose/ENU velocity/angular velocity; no FSD output.");
+      diagnostics_->add(ins_diag::NONFINITE_REJECTED);
       return;
     }
 
@@ -136,13 +146,15 @@ private:
         !std::isfinite(msg->euler_stdev[axis]) || msg->euler_stdev[axis] < 0.0) {
         RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
           "Rejecting invalid INS pose standard deviations; no FSD output.");
+        diagnostics_->add(ins_diag::STDEV_REJECTED);
         return;
       }
     }
 
     if (!origin_ready_) {
-      if (std::isfinite(origin_lat_param_) && std::isfinite(origin_lon_param_) &&
-        std::isfinite(origin_alt_param_))
+      const bool configured_origin = std::isfinite(origin_lat_param_) &&
+        std::isfinite(origin_lon_param_) && std::isfinite(origin_alt_param_);
+      if (configured_origin)
       {
         origin_lat_ = origin_lat_param_;
         origin_lon_ = origin_lon_param_;
@@ -152,9 +164,11 @@ private:
         origin_lon_ = msg->longitude;
         origin_alt_ = msg->altitude;
       }
-      origin_ready_ = true;
-      RCLCPP_INFO(
-        get_logger(), "局部 ENU 原点: lat=%.9f lon=%.9f alt=%.3f",
+      // 状态0也发布，但不能把无效经纬度永久锁为车辆定位原点。
+      // 未达到4时只使用本帧临时参考，状态4到达后固定原点。
+      origin_ready_ = configured_origin || msg->stat[1] == 4;
+      RCLCPP_INFO_THROTTLE(
+        get_logger(), *get_clock(), 5000, "局部 ENU 参考: lat=%.9f lon=%.9f alt=%.3f",
         origin_lat_, origin_lon_, origin_alt_);
 
       // 原点固定后投影常量只需算一次，不必每帧重算
@@ -223,7 +237,10 @@ private:
     vel.twist = odom.twist.twist;
 
     odometry_pub_->publish(odom);
+    diagnostics_->add(ins_diag::ODOMETRY_PUBLISHED);
     velocity_pub_->publish(vel);
+    diagnostics_->add(ins_diag::VELOCITY_PUBLISHED);
+    diagnostics_->output();
   }
 
   static void fillPoseCovariance(
@@ -300,13 +317,15 @@ private:
   double rn_ = 0.0;
   double rm_ = 0.0;
 
-  int min_gnss_status_ = 1;
+  int min_gnss_status_ = 0;
 
   double roll_offset_deg_ = 0.0;
   double pitch_offset_deg_ = 0.0;
   double yaw_offset_deg_ = 0.0;
 
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odometry_pub_;
+  std::shared_ptr<ins_diag::Recorder> diagnostics_ = std::make_shared<ins_diag::Recorder>("bridge");
+  rclcpp::TimerBase::SharedPtr diagnostics_timer_;
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr velocity_pub_;
   rclcpp::Subscription<msg_interfaces::msg::Hcinspvatzcb>::SharedPtr devpvt_sub_;
 };
