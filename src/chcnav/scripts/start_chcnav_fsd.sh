@@ -74,7 +74,7 @@ PYEOF
 }
 
 usage() {
-  echo "用法: $0 [--cfg=FILE] [--type=serial] [--port=/dev/ttyUSB0] [--baud=460800] [--rate=1000]"
+  echo "用法: $0 [--cfg=FILE] [--type=serial] [--port=/dev/serial/by-id/usb-Prolific_Technology_Inc._USB-Serial_Controller_BKEDc143M08-if00-port0] [--baud=460800] [--rate=1000]"
   echo "          [--min-gnss-status=1] [--roll-offset=0] [--pitch-offset=0] [--yaw-offset=0]"
   echo "          [--log|--no-log] [--log-dir=DIR] [--log-style=brief|full] [--log-topics=LIST]"
   echo "          [--build|--no-build] [--dry-run]"
@@ -95,7 +95,7 @@ usage() {
 
 # ---------- 内置默认（优先级最低） ----------
 TYPE="serial"
-PORT="/dev/ttyUSB0"
+PORT="/dev/serial/by-id/usb-Prolific_Technology_Inc._USB-Serial_Controller_BKEDc143M08-if00-port0"
 BAUD="460800"
 RATE="1000"
 MIN_GNSS_STATUS="0"

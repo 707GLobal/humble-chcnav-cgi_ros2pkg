@@ -16,7 +16,7 @@
 /chcnav_msg_parser:
   ros__parameters:
     type: serial            # serial | tcp | tcp_server | udp | can | file
-    port: /dev/ttyUSB0      # type=serial 时的串口路径（RS232 / USB 转串口）
+    port: /dev/serial/by-id/usb-Prolific_Technology_Inc._USB-Serial_Controller_BKEDc143M08-if00-port0      # type=serial 时的串口路径（RS232 / USB 转串口）
     baudrate: 460800        # 波特率，必须与 CGI-410 的输出配置一致
     rate: 1000              # 每秒最大解析协议数
 

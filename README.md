@@ -53,17 +53,19 @@ source install/setup.bash
 
 ```bash
 ls -l /dev/ttyUSB*                  # 确认设备存在
-sudo chmod 666 /dev/ttyUSB0         # 临时放开读写权限
+sudo chmod 666 /dev/serial/by-id/usb-Prolific_Technology_Inc._USB-Serial_Controller_BKEDc143M08-if00-port0         # 临时放开读写权限
 # 或长期方案：把当前用户加入 dialout 组后重新登录
 sudo usermod -aG dialout $USER
 ```
 
 ---
 
+默认串口绑定本机 Prolific 适配器序列号，避免与 E22 的 CH340 因插入顺序交换 ttyUSB 编号。更换适配器时先核对 `/dev/serial/by-id/`，再用 `--port` 或源码 YAML 配置真实设备；不回退到猜测的 ttyUSB 编号。
+
 ## 3. 快速开始
 
 ```bash
-# 一键启动（默认 /dev/ttyUSB0 @460800，自动构建，前台运行，Ctrl-C 退出）
+# 一键启动（默认 /dev/serial/by-id/usb-Prolific_Technology_Inc._USB-Serial_Controller_BKEDc143M08-if00-port0 @460800，自动构建，前台运行，Ctrl-C 退出）
 src/chcnav/scripts/start_chcnav_fsd.sh
 
 # 常用变体
@@ -222,7 +224,7 @@ twist 和设备时间戳，`linear.x/y/z` 分别为前向、左向、上向速�
 | 参数 | 说明 | 默认 |
 | --- | --- | --- |
 | `--type` | 数据源类型 | `serial` |
-| `--port` | 串口路径 | `/dev/ttyUSB0` |
+| `--port` | 串口路径 | `/dev/serial/by-id/usb-Prolific_Technology_Inc._USB-Serial_Controller_BKEDc143M08-if00-port0` |
 | `--baud` | 波特率 | `460800` |
 | `--rate` | 每秒最大解析协议数 | `1000` |
 | `--min-gnss-status` | 定位质量门限，`0` 不过滤，`4/8` RTK 固定解 | `1` |

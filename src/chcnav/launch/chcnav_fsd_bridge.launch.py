@@ -193,7 +193,7 @@ def generate_launch_description():
     arg_specs = [
         ('type', d('type', 'serial'),
          '数据源类型，默认 serial'),
-        ('port', d('port', '/dev/ttyUSB0'),
+        ('port', d('port', '/dev/serial/by-id/usb-Prolific_Technology_Inc._USB-Serial_Controller_BKEDc143M08-if00-port0'),
          '串口路径（RS232 / USB 转串口）'),
         ('baudrate', d('baudrate', '460800'),
          '波特率，需与 CGI-410 输出配置一致'),
