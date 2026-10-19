@@ -237,6 +237,9 @@ twist 和设备时间戳，`linear.x/y/z` 分别为前向、左向、上向速�
 | `--build` / `--no-build` | 强制/跳过构建 | 缺产物或源码更新时自动构建 |
 | `--dry-run` | 只检查+构建，不启动 | 关 |
 
+全栈入口启动本链路时会传入 `--log-dir=wuta_logs/<赛项>/<YYYYmmdd_HHMMSS>/chcnav_log`，
+因此整体运行时不再写入 `<包>/log`；单独启动时仍按上表默认值。
+
 ### 6.2 直接用 launch
 
 ```bash
